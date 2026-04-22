@@ -1,0 +1,16 @@
+{
+  "stock": "600519.SH",
+  "instrument_name": "贵州茅台",
+  "price_adjustment": "front",
+  "data_source": "local",
+  "indicator_mode": "python",
+  "use_financial_data": false,
+  "period": "1d",
+  "start_date": "20240101",
+  "end_date": "20260422",
+  "initial_cash": 100000.0,
+  "final_equity": 100000.0,
+  "total_return": 0.0,
+  "trade_count": 0,
+  "benchmark_sector": "上证A股"
+}
