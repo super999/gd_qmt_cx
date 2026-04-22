@@ -22,28 +22,31 @@ QMT 自带 Python 示例策略目录是：
 
 当前推荐 QMT 使用：
 
-- `D:\python_envs\gd_qmt_py36`
+- `D:\python_envs\gd_qmt_env`
 
 原因很直接：
 
-- QMT 安装目录里带有 `python36.dll`
-- 这说明 QMT 至少明确兼容 Python 3.6 这一套运行时
-- 因此优先使用 Python 3.6.13 环境，兼容性风险最小
+- 已实测可 `import xtquant`
+- 已实测可跑通大部分冒烟测试与 `xtdata` API 测试
+- 用户当前也更倾向以更高版本 Python 作为主开发环境
+- 因此当前项目默认优先使用 Python 3.12 环境开发
 
 这个环境当前已经准备好：
 
-- Python `3.6.13`
-- `numpy 1.19.5`
-- `pandas 1.1.5`
-- `scipy 1.5.4`
-- `scikit-learn 0.24.2`
-- `statsmodels 0.12.2`
+- Python `3.12`
+- 已安装 `numpy/pandas/scipy/scikit-learn/statsmodels`
 
-### 另一个已存在环境
+### 兼容性备用环境
 
-- `D:\python_envs\gd_qmt_env`
+- `D:\python_envs\gd_qmt_py36`
 
-这个环境是 Python `3.12`，适合作为一般 Python 分析环境，但不建议优先用于 QMT 原生接口接入，因为当前已确认 QMT 安装目录内自带的是 Python 3.6 运行时。
+这个环境是 Python `3.6.13`，与 QMT 安装目录中的 `python36.dll` 匹配。
+
+它的定位现在是：
+
+- 兼容性备用环境
+- 当 Python 3.12 环境遇到疑似版本问题时，用于交叉验证
+- 不再默认作为首选开发环境
 
 ## 3. 当前已确认的关键事实
 

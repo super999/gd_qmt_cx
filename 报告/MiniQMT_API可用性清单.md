@@ -10,7 +10,9 @@
 - 测试环境：MiniQMT / 当前账户 / 当前 Python 环境
 - 结论性质：仅代表当前环境下的实测与已知反馈，不代表官方全量能力
 - 记录原则：只写已验证事实，不把“脚本里出现过”直接等同于“接口可用”
-- 本次实测执行环境：`d:\python_envs\gd_qmt_py36\python.exe`，测试日期 `2026-04-22`
+- 主要 API 矩阵实测环境：`d:\python_envs\gd_qmt_py36\python.exe`，测试日期 `2026-04-22`
+- 补充冒烟验证环境：`d:\python_envs\gd_qmt_env\python.exe`，测试日期 `2026-04-22`
+- 当前开发环境结论：`d:\python_envs\gd_qmt_env`（Python `3.12`）已确认可用，并应作为优先开发环境；`d:\python_envs\gd_qmt_py36` 作为兼容性备用环境保留
 
 ## 面向后续 Agent 的阅读方式
 
@@ -85,7 +87,7 @@
 
 建议写进去的内容：
 
-- 当前推荐 Python 环境：`d:\python_envs\gd_qmt_py36`
+- 当前推荐 Python 环境：`d:\python_envs\gd_qmt_env`
 - 当前已验证可用的 xtdata 接口清单
 - 当前明确不可依赖的接口：`download_financial_data`、`get_trading_calendar`、`get_period_list`
 - 回测优先数据来源：`get_local_data` / `get_market_data_ex`

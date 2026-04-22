@@ -22,13 +22,21 @@
 - `d:\python_envs\gd_qmt_env`
   - Python `3.12`
   - 已安装 `numpy/pandas/scipy/scikit-learn/statsmodels`
-  - 适合做一般 Python 分析，不适合作为 QMT 原生接口首选环境
+  - 已确认可 `import xtquant`，并已跑通大部分冒烟测试与 API 测试
+  - 这是当前推荐的首选开发环境
 
 - `d:\python_envs\gd_qmt_py36`
   - Python `3.6.13`
   - 已安装兼容版本的 `numpy/pandas/scipy/scikit-learn/statsmodels`
   - 与 QMT 安装目录中的 `python36.dll` 匹配
-  - 这是当前推荐的 QMT 首选 Python 环境
+  - 可作为兼容性备用环境，不再默认视为首选开发环境
+
+## Environment Decision Update
+
+- 早期判断曾偏向 `d:\python_envs\gd_qmt_py36`，主要依据是 QMT 安装目录中的 `python36.dll`。
+- 后续实测已确认：`d:\python_envs\gd_qmt_env`（Python `3.12`）可以正常导入 `xtquant`，并可跑通大部分冒烟测试与 `xtdata` API 测试。
+- 因此，当前项目默认应优先使用 `d:\python_envs\gd_qmt_env` 进行外部 Python 开发与测试。
+- 只有在遇到明确的版本兼容问题时，才回退到 `d:\python_envs\gd_qmt_py36` 做交叉验证。
 
 ## Current Facts
 
