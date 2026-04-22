@@ -28,3 +28,10 @@ env/
 
 # Trae CN worktree (duplicate of main)
 trae-cn-worktree/
+
+# Output files (backtest results, test reports)
+# 这些文件可以从代码重建，不应提交到版本控制
+**/outputs/
+
+# 但保留 .gitkeep 文件以保持目录结构
+!**/outputs/.gitkeep
