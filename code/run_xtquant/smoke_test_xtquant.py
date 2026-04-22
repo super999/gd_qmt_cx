@@ -3,6 +3,7 @@
 """
 xtquant 冒烟测试脚本
 验证 Trae CN 环境能否正常导入和使用 xtquant
+支持多 Python 环境测试，生成独立的报告文件
 """
 
 import sys
@@ -12,14 +13,27 @@ from datetime import datetime
 TEST_STOCK = '510300.SH'
 TEST_PERIOD = '1d'
 
+python_executable = sys.executable
+python_version_info = f"{sys.version_info.major}.{sys.version_info.minor}"
+
 report = {
     'test_time': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
     'python_version': sys.version,
+    'python_version_short': python_version_info,
+    'python_executable': python_executable,
+    'environment_note': '',
     'results': [],
     'passed': 0,
     'failed': 0,
     'total': 0
 }
+
+if 'gd_qmt_py36' in python_executable:
+    report['environment_note'] = 'QMT 原生兼容环境 (Python 3.6) - 推荐用于 QMT 策略开发'
+elif 'gd_qmt_env' in python_executable:
+    report['environment_note'] = '通用分析环境 (Python 3.12) - 适合数据分析，可能不兼容 QMT 原生接口'
+else:
+    report['environment_note'] = '未知环境'
 
 
 def log_result(name, success, message='', detail=None):
@@ -153,55 +167,64 @@ def generate_report():
         'total': report['total']
     }
     
-    print("\n" + "=" * 60)
+    print("\n" + "=" * 70)
     print("XTQUANT 冒烟测试报告")
-    print("=" * 60)
+    print("=" * 70)
     print(f"测试时间: {report['test_time']}")
-    print(f"Python 版本: {report['python_version']}")
+    print(f"Python 版本: {report['python_version_short']}")
+    print(f"Python 解释器: {report['python_executable']}")
+    print(f"环境说明: {report['environment_note']}")
     print(f"测试结果: {report['summary']['status']}")
     print(f"通过: {report['passed']}/{report['total']}")
     print(f"失败: {report['failed']}/{report['total']}")
-    print("=" * 60)
+    print("=" * 70)
     
     for result in report['results']:
         status = '✓' if result['success'] else '✗'
         print(f"{status} {result['name']}: {result['message']}")
     
-    print("=" * 60)
+    print("=" * 70)
     
     import os
     output_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'outputs')
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
     
-    report_path = os.path.join(output_dir, 'smoke_test_report.json')
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    report_filename = f'smoke_test_report_py{python_version_info}_{timestamp}.json'
+    report_path = os.path.join(output_dir, report_filename)
+    
     with open(report_path, 'w', encoding='utf-8') as f:
         json.dump(report, f, ensure_ascii=False, indent=2)
     
     print(f"\n报告已保存到: {report_path}")
+    print(f"报告文件名已包含 Python 版本和时间戳，不会覆盖旧报告")
     
     return report['summary']['status'] == 'SUCCESS'
 
 
 def main():
-    print("开始 xtquant 冒烟测试...")
-    print("-" * 60)
+    print("=" * 70)
+    print(f"开始 xtquant 冒烟测试 (Python {python_version_info})")
+    print(f"Python 解释器: {python_executable}")
+    print(f"环境: {report['environment_note']}")
+    print("=" * 70)
     
     if not test_import_xtquant():
         print("\n错误: 无法导入 xtquant，测试终止")
         generate_report()
         sys.exit(1)
     
-    print("-" * 60)
+    print("-" * 70)
     test_xtdata_connection()
     
-    print("-" * 60)
+    print("-" * 70)
     test_market_data_structure()
     
-    print("-" * 60)
+    print("-" * 70)
     test_get_full_tick()
     
-    print("-" * 60)
+    print("-" * 70)
     success = generate_report()
     
     sys.exit(0 if success else 0)
