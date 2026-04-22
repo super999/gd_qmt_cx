@@ -16,13 +16,15 @@ This is a quantitative trading project for 光大证券 QMT (MiniQMT). The goal 
 
 Two environments are configured:
 
-- `d:\python_envs\gd_qmt_py36` (Python 3.6.13) - **Recommended for QMT**
+- `d:\python_envs\gd_qmt_env` (Python 3.12) - **Recommended for active development**
+  - Confirmed to import `xtquant`
+  - Confirmed to pass smoke tests and most `xtdata` API tests
+  - This is the preferred environment for new strategy/backtest code
+
+- `d:\python_envs\gd_qmt_py36` (Python 3.6.13) - Compatibility fallback
   - Contains: numpy 1.19.5, pandas 1.1.5, scipy 1.5.4, scikit-learn 0.24.2, statsmodels 0.12.2
   - Matches the `python36.dll` in QMT installation directory
-  - This is the primary environment for QMT native interface access
-
-- `d:\python_envs\gd_qmt_env` (Python 3.12) - General analysis only
-  - Not recommended for QMT native interface
+  - Use it only when a version-compatibility issue needs cross-checking
 
 ## Code Structure
 
@@ -47,9 +49,10 @@ Two environments are configured:
 
 The project has completed API availability verification:
 
-- **Available APIs**: `xtdata` import, `xttrader` import, historical data download/query, real-time subscription, sector data
+- **Available APIs**: `xtdata` import, `xttrader` import, historical data download/query, local data query, real-time subscription, callback event loop, sector data, instrument detail
 - **Blocked APIs**: `xtdata.download_financial_data` (hangs on call)
-- **Untested**: `xtdata.run` event loop, trading connection/callback chains
+- **Unavailable in current client**: `xtdata.get_trading_calendar`, `xtdata.get_period_list`
+- **Untested**: trading connection/account/order chains
 
 See `报告/MiniQMT_API可用性清单.md` for detailed API test results.
 
@@ -63,8 +66,8 @@ See `报告/MiniQMT_API可用性清单.md` for detailed API test results.
 ## Common Commands
 
 ```bash
-# Activate QMT Python environment
-d:\python_envs\gd_qmt_py36\python.exe
+# Preferred Python environment
+d:\python_envs\gd_qmt_env\python.exe
 
 # Run API test suite
 python code/run_xtquant/test_xtquant_api_matrix.py

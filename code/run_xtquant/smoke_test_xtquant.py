@@ -29,9 +29,9 @@ report = {
 }
 
 if 'gd_qmt_py36' in python_executable:
-    report['environment_note'] = 'QMT 原生兼容环境 (Python 3.6) - 推荐用于 QMT 策略开发'
+    report['environment_note'] = 'QMT 兼容性备用环境 (Python 3.6) - 用于版本兼容交叉验证'
 elif 'gd_qmt_env' in python_executable:
-    report['environment_note'] = '通用分析环境 (Python 3.12) - 适合数据分析，可能不兼容 QMT 原生接口'
+    report['environment_note'] = '当前优先开发环境 (Python 3.12) - 已确认可用于 xtquant 冒烟测试与大部分 API 测试'
 else:
     report['environment_note'] = '未知环境'
 
