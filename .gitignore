@@ -19,3 +19,12 @@ build/
 .env
 venv/
 env/
+
+# WorkBuddy
+.workbuddy/
+
+# Crash dumps
+*.dmp
+
+# Trae CN worktree (duplicate of main)
+trae-cn-worktree/
