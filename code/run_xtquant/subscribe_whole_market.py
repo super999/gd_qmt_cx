@@ -171,12 +171,12 @@ def on_whole_market_data(datas):
     stock_set.update(current_stocks)
     stock_count = len(stock_set)
     
-    now = datetime.datetime.now().strftime("%H:%M:%S")
     elapsed = (datetime.datetime.now() - start_time).total_seconds() if start_time else 0
     
-    # 每 10 次推送打印一次统计摘要
+    # 每 10 次推送打印一次统计摘要（统计信息用本地时间合理，不是行情时间）
     if push_count % 10 == 0:
-        print(f"[{now}] [全推统计] 第{push_count}次推送 | "
+        stat_time = datetime.datetime.now().strftime("%H:%M:%S")
+        print(f"[{stat_time}] [全推统计] 第{push_count}次推送 | "
               f"本次推送标的数: {len(datas)} | "
               f"累计不同标的: {stock_count} | "
               f"运行时长: {elapsed:.0f}s")
@@ -192,7 +192,7 @@ def on_whole_market_data(datas):
             if isinstance(tick_ts, (int, float)) and tick_ts > 0:
                 focus_time = datetime.datetime.fromtimestamp(tick_ts / 1000).strftime("%H:%M:%S")
             else:
-                focus_time = now
+                focus_time = "??:??:??"
             last_price = data.get('lastPrice', 'N/A')
             pre_close = data.get('lastClose', 'N/A')
             volume = data.get('volume', 'N/A')
@@ -236,7 +236,7 @@ def on_etf_list_data(datas):
         if isinstance(tick_ts, (int, float)) and tick_ts > 0:
             tick_time = datetime.datetime.fromtimestamp(tick_ts / 1000).strftime("%H:%M:%S.%f")[:-3]
         else:
-            tick_time = datetime.datetime.now().strftime("%H:%M:%S.%f")[:-3]
+            tick_time = "?:?:?.???"
         
         last_price = data.get('lastPrice', 'N/A')
         volume = data.get('volume', 'N/A')

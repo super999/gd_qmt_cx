@@ -156,7 +156,7 @@ def on_tick_data(datas):
             if isinstance(tick_ts, (int, float)) and tick_ts > 0:
                 tick_time = datetime.datetime.fromtimestamp(tick_ts / 1000).strftime("%H:%M:%S.%f")[:-3]
             else:
-                tick_time = datetime.datetime.now().strftime("%H:%M:%S.%f")[:-3]
+                tick_time = "?:?:?.???"
             last_price = tick.get('lastPrice', 'N/A')
             open_price = tick.get('open', 'N/A')
             high = tick.get('high', 'N/A')
@@ -211,10 +211,18 @@ def on_daily_data(datas):
     
     回调数据格式: { stock_code: [data1, data2, ...] }
     每个 data 是一条日K记录
+    
+    日线数据字段：time(毫秒时间戳), open, high, low, close, volume, amount,
+                 settlementPrice, openInterest, dr, totaldr, suspendFlag
     """
-    now = datetime.datetime.now().strftime("%H:%M:%S")
     for stock_code, kline_list in datas.items():
         for kline in kline_list:
+            # 使用日线自带的 time 时间戳
+            kline_ts = kline.get('time', 0)
+            if isinstance(kline_ts, (int, float)) and kline_ts > 0:
+                kline_time = datetime.datetime.fromtimestamp(kline_ts / 1000).strftime("%Y-%m-%d %H:%M")
+            else:
+                kline_time = "????-??-??"
             open_p = kline.get('open', 'N/A')
             high_p = kline.get('high', 'N/A')
             low_p = kline.get('low', 'N/A')
@@ -222,7 +230,7 @@ def on_daily_data(datas):
             vol = kline.get('volume', 'N/A')
             amount = kline.get('amount', 'N/A')
             
-            print(f"[{now}] [1D] {stock_code} | "
+            print(f"[{kline_time}] [1D] {stock_code} | "
                   f"开: {fmt_price(open_p)} | 高: {fmt_price(high_p)} | "
                   f"低: {fmt_price(low_p)} | 收: {fmt_price(close_p)} | "
                   f"量: {fmt_vol(vol)} | 额: {fmt_amount(amount)}")
