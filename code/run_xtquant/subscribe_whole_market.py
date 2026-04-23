@@ -88,6 +88,56 @@ def fmt_amount(value):
         return f"{value / 1e4:.2f}万"
     return f"{value:.2f}"
 
+
+def fmt_vol(value):
+    """
+    格式化成交量，转为可读单位
+    
+    xtdata 的 volume 字段单位是"手"（非"股"），
+    验证依据：pvolume ≈ volume * 100（pvolume是股，volume是手）
+    
+    规则：
+      - 非数值原样返回
+      - >= 1亿手: 显示为 X.XX亿手
+      - >= 1万手: 显示为 X.XX万手
+      - < 1万手:  取整显示
+    """
+    if value == 'N/A' or not isinstance(value, (int, float)):
+        return str(value)
+    if abs(value) >= 1e8:
+        return f"{value / 1e8:.2f}亿手"
+    if abs(value) >= 1e4:
+        return f"{value / 1e4:.2f}万手"
+    return f"{int(value)}手"
+
+
+def fmt_chg(price, pre_close):
+    """
+    格式化涨跌幅，返回字符串如 +1.23% 或 -0.56%
+    """
+    try:
+        if price != 'N/A' and pre_close != 'N/A' and isinstance(price, (int, float)) and isinstance(pre_close, (int, float)) and pre_close > 0:
+            chg_pct = (price - pre_close) / pre_close * 100
+            chg_val = price - pre_close
+            return f"{chg_val:+.3f} ({chg_pct:+.2f}%)"
+        return "N/A"
+    except Exception:
+        return "N/A"
+
+
+def fmt_bid_ask(prices, volumes):
+    """
+    格式化五档盘口，返回形如 "4.776/4568  4.777/9213  ..." 的字符串
+    """
+    if not prices or not volumes:
+        return "N/A"
+    parts = []
+    for i in range(min(5, len(prices))):
+        p = fmt_price(prices[i]) if isinstance(prices[i], (int, float)) else str(prices[i])
+        v = fmt_vol(volumes[i]) if i < len(volumes) else "-"
+        parts.append(f"{p}/{v}")
+    return "  ".join(parts)
+
 def signal_handler(sig, frame):
     """Ctrl+C 退出处理"""
     global running
@@ -130,10 +180,14 @@ def on_whole_market_data(datas):
         if code in datas:
             data = datas[code]
             last_price = data.get('lastPrice', 'N/A')
-            last_vol = data.get('lastVolume', 'N/A')
+            pre_close = data.get('lastClose', 'N/A')
+            volume = data.get('volume', 'N/A')
+            amount = data.get('amount', 'N/A')
             name = data.get('instrumentName', '')
+            chg_str = fmt_chg(last_price, pre_close)
             print(f"  [{now}] [FOCUS] {code} {name} | "
-                  f"最新价: {fmt_price(last_price)} | 成交量: {last_vol}")
+                  f"最新: {fmt_price(last_price)} | 涨跌: {chg_str} | "
+                  f"量: {fmt_vol(volume)} | 额: {fmt_amount(amount)}")
 
 
 def on_etf_list_data(datas):
@@ -143,7 +197,7 @@ def on_etf_list_data(datas):
     回调数据格式: { stock1: data1, stock2: data2, ... }
     每个股票对应单个 data 对象（非列表）
     
-    ETF列表模式下标的少，逐个打印详细信息
+    ETF列表模式下标的少，逐个打印详细信息（含五档盘口）
     """
     global push_count, start_time
     
@@ -153,28 +207,37 @@ def on_etf_list_data(datas):
     
     for code, data in datas.items():
         last_price = data.get('lastPrice', 'N/A')
-        last_vol = data.get('lastVolume', 'N/A')
+        volume = data.get('volume', 'N/A')
         amount = data.get('amount', 'N/A')
         open_p = data.get('open', 'N/A')
         high_p = data.get('high', 'N/A')
         low_p = data.get('low', 'N/A')
         pre_close = data.get('lastClose', 'N/A')
+        ask_prices = data.get('askPrice', [])
+        bid_prices = data.get('bidPrice', [])
+        ask_vols = data.get('askVol', [])
+        bid_vols = data.get('bidVol', [])
+        txn_num = data.get('transactionNum', 'N/A')
         name = data.get('instrumentName', '')
         
-        # 计算涨跌幅
-        try:
-            if last_price != 'N/A' and pre_close != 'N/A' and pre_close > 0:
-                chg_pct = (last_price - pre_close) / pre_close * 100
-                chg_str = f"{chg_pct:+.2f}%"
-            else:
-                chg_str = "N/A"
-        except Exception:
-            chg_str = "N/A"
+        # 涨跌幅
+        chg_str = fmt_chg(last_price, pre_close)
         
-        print(f"[{now}] [{code}] {name} | "
-              f"最新: {fmt_price(last_price)} | 涨跌: {chg_str} | "
-              f"开: {fmt_price(open_p)} | 高: {fmt_price(high_p)} | 低: {fmt_price(low_p)} | "
-              f"量: {last_vol} | 额: {fmt_amount(amount)}")
+        # 第一行：时间 + 代码 + 价格核心信息
+        print(f"\n[{now}] [{code}] {name} | "
+              f"最新: {fmt_price(last_price)} | 涨跌: {chg_str}")
+        # 第二行：开高低 + 昨收
+        print(f"  开: {fmt_price(open_p)} | "
+              f"高: {fmt_price(high_p)} | "
+              f"低: {fmt_price(low_p)} | "
+              f"昨收: {fmt_price(pre_close)}")
+        # 第三行：成交统计
+        print(f"  量: {fmt_vol(volume)} | "
+              f"额: {fmt_amount(amount)} | "
+              f"笔数: {txn_num}")
+        # 第四行：五档盘口
+        print(f"  卖五~卖一: {fmt_bid_ask(list(reversed(ask_prices)), list(reversed(ask_vols)))}")
+        print(f"  买一~买五: {fmt_bid_ask(bid_prices, bid_vols)}")
     
     if push_count % 20 == 0:
         print(f"  -- 累计推送 {push_count} 次 | 运行 {elapsed:.0f}s --")

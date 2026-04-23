@@ -74,21 +74,24 @@ def fmt_amount(value):
 
 def fmt_vol(value):
     """
-    格式化成交量（股数），转为可读单位
+    格式化成交量，转为可读单位
+    
+    xtdata 的 volume 字段单位是"手"（非"股"），
+    验证依据：pvolume ≈ volume * 100（pvolume是股，volume是手）
     
     规则：
       - 非数值原样返回
-      - >= 1万手(100万股): 显示为 X.XX万手
-      - >= 1万: 显示为 X.XX万
-      - < 1万:  取整显示
+      - >= 1亿手: 显示为 X.XX亿手
+      - >= 1万手: 显示为 X.XX万手
+      - < 1万手:  取整显示
     """
     if value == 'N/A' or not isinstance(value, (int, float)):
         return str(value)
-    if abs(value) >= 1e6:
-        return f"{value / 1e5:.2f}万手"
+    if abs(value) >= 1e8:
+        return f"{value / 1e8:.2f}亿手"
     if abs(value) >= 1e4:
-        return f"{value / 1e4:.2f}万"
-    return f"{int(value)}"
+        return f"{value / 1e4:.2f}万手"
+    return f"{int(value)}手"
 
 
 def fmt_chg(price, pre_close):
@@ -134,22 +137,48 @@ def on_tick_data(datas):
     
     回调数据格式: { stock_code: [data1, data2, ...] }
     每个 data 是一条 tick 记录
+    
+    tick 数据完整字段（以 510300.SH 为例）:
+      lastPrice, open, high, low, lastClose, amount, volume,
+      askPrice[5], bidPrice[5], askVol[5], bidVol[5],
+      transactionNum, stockStatus, pe, volRatio, speed1Min, speed5Min
     """
     now = datetime.datetime.now().strftime("%H:%M:%S.%f")[:-3]
     for stock_code, tick_list in datas.items():
         for tick in tick_list:
-            # tick 数据关键字段：lastPrice, lastVolume, amount 等
             last_price = tick.get('lastPrice', 'N/A')
-            last_vol = tick.get('lastVolume', 'N/A')
-            amount = tick.get('amount', 'N/A')
             open_price = tick.get('open', 'N/A')
             high = tick.get('high', 'N/A')
             low = tick.get('low', 'N/A')
+            pre_close = tick.get('lastClose', 'N/A')
+            volume = tick.get('volume', 'N/A')
+            amount = tick.get('amount', 'N/A')
+            ask_prices = tick.get('askPrice', [])
+            bid_prices = tick.get('bidPrice', [])
+            ask_vols = tick.get('askVol', [])
+            bid_vols = tick.get('bidVol', [])
+            txn_num = tick.get('transactionNum', 'N/A')
+            stock_status = tick.get('stockStatus', 'N/A')
             
-            print(f"[{now}] [TICK] {stock_code} | "
-                  f"最新价: {fmt_price(last_price)} | 成交量: {last_vol} | "
-                  f"成交额: {fmt_amount(amount)} | 开: {fmt_price(open_price)} | "
-                  f"高: {fmt_price(high)} | 低: {fmt_price(low)}")
+            # 涨跌幅
+            chg_str = fmt_chg(last_price, pre_close)
+            
+            # 第一行：时间 + 代码 + 价格核心信息
+            print(f"\n[{now}] [{stock_code}] "
+                  f"最新: {fmt_price(last_price)} | 涨跌: {chg_str}")
+            # 第二行：开高低 + 昨收
+            print(f"  开: {fmt_price(open_price)} | "
+                  f"高: {fmt_price(high)} | "
+                  f"低: {fmt_price(low)} | "
+                  f"昨收: {fmt_price(pre_close)}")
+            # 第三行：成交统计
+            print(f"  量: {fmt_vol(volume)} | "
+                  f"额: {fmt_amount(amount)} | "
+                  f"笔数: {txn_num} | "
+                  f"状态: {stock_status}")
+            # 第四行：五档盘口
+            print(f"  卖五~卖一: {fmt_bid_ask(list(reversed(ask_prices)), list(reversed(ask_vols)))}")
+            print(f"  买一~买五: {fmt_bid_ask(bid_prices, bid_vols)}")
 
 
 def on_daily_data(datas):
@@ -169,10 +198,10 @@ def on_daily_data(datas):
             vol = kline.get('volume', 'N/A')
             amount = kline.get('amount', 'N/A')
             
-            print(f"[{now}] [1D]   {stock_code} | "
+            print(f"[{now}] [1D] {stock_code} | "
                   f"开: {fmt_price(open_p)} | 高: {fmt_price(high_p)} | "
                   f"低: {fmt_price(low_p)} | 收: {fmt_price(close_p)} | "
-                  f"量: {vol} | 额: {fmt_amount(amount)}")
+                  f"量: {fmt_vol(vol)} | 额: {fmt_amount(amount)}")
 
 
 def main():
