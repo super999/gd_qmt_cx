@@ -48,6 +48,7 @@
 | 股票池/板块 | `xtdata.get_sector_list`、`xtdata.get_stock_list_in_sector` | 可直接拿板块目录和成分股 |
 | 合约基础属性 | `xtdata.get_instrument_detail` | 可拿证券名称、上市日、涨跌停价等 |
 | 盘中订阅 | `xtdata.subscribe_quote` + `xtdata.run` | 后续若要做盘中策略，这条链路已经实测打通 |
+| 全推行情 | `ContextInfo.subscribe_whole_quote`（QMT 内） | 2026-04-23 已在 QMT 内验证，支持按市场或按标的列表订阅，回调数据含五档盘口 |
 
 当前不建议把这些作为回测主依赖：
 
@@ -70,6 +71,8 @@
 | `xtdata.get_local_data` | `可用` | 返回 `dict`，键是证券代码，值是 `pandas.DataFrame` |
 | `xtdata.subscribe_quote` | `可用` | 返回订阅号，本次实测为字符串形式的 `"1"` |
 | `xtdata.run` | `可用` | 本身是阻塞事件循环入口；配合回调后，回调参数是 `dict`，键为证券代码 |
+| `ContextInfo.subscribe_quote`（QMT 内） | `可用` | 返回订阅号（int）；result_type='dict' 时回调参数为 `{stock_code: {field: value}}`，含 stime/lastPrice/open/high/low/lastClose/volume/pvolume/transactionNum/askPrice[5]/bidPrice[5]/askVol[5]/bidVol[5] |
+| `ContextInfo.subscribe_whole_quote`（QMT 内） | `可用` | 返回订阅号（int）；回调参数为 `{stock1: data1, ...}`，每条 data 含 time(ms)/lastPrice/open/high/low/lastClose/volume/pvolume/transactionNum/amount/askPrice[5]/bidPrice[5]/askVol[5]/bidVol[5]/volRatio/speed1Min/speed5Min |
 | `xtdata.get_sector_list` | `可用` | 返回 `list[str]`，本次实测共 854 个板块名 |
 | `xtdata.get_stock_list_in_sector` | `可用` | 返回 `list[str]`，本次实测“上证A股”共 2312 个合约 |
 | `xtdata.get_instrument_detail` | `可用` | 返回 `dict`，字段包括 `InstrumentName`、`OpenDate`、`UpStopPrice`、`DownStopPrice` 等 |
@@ -148,6 +151,8 @@
 | --- | --- | --- | --- | --- | --- |
 | `xtdata.subscribe_quote` | `可用` | `code/run_xtquant/test_xtquant_api_matrix.py` 实测 | `code/run_xtquant/test_xtquant_api_matrix.py` | 2026-04-22 实测返回订阅号 `1`，等待 1.5 秒后可继续通过 `get_market_data_ex` 读取到 `600519.SH` 数据。 | 当前只验证了“订阅调用可成功返回”，未验证带回调模式。 |
 | `xtdata.run` | `可用` | `code/run_xtquant/test_xtquant_api_matrix.py` 第二轮实测 | `code/run_xtquant/test_xtquant_api_matrix.py` | 2026-04-22 通过独立子进程实测 `subscribe_quote + callback + xtdata.run`，成功观察到回调触发，返回标的键 `600519.SH`。 | 当前已确认回调链路能跑；若后续做盘中策略，再继续测多标的、多周期和长时间稳定性。 |
+| `ContextInfo.subscribe_quote`（QMT 内） | `可用` | 用户在 QMT 中实测 | `code/run_qmt/subscribe_quote_510300.py` | 2026-04-23 在 QMT 实盘模式下实测 510300.SH，tick 和 1m 两种周期均成功订阅并触发回调。回调数据包含：stime、lastPrice、open/high/low/lastClose、volume/pvolume/transactionNum、askPrice[5]/bidPrice[5]/askVol[5]/bidVol[5]。result_type='dict' 时回调参数为 `{stock_code: {field: value}}`。 | QMT 内 subscribe_quote 回调函数只接收1个参数 `datas`，不需要 `ContextInfo`。这与 init/handlebar 的签名不同，容易写错。 |
+| `ContextInfo.subscribe_whole_quote`（QMT 内） | `可用` | 用户在 QMT 中实测 | `code/run_qmt/subscribe_whole_quote.py` | 2026-04-23 在 QMT 实盘模式下实测，按标的列表订阅 `['510300.SH', '159919.SZ', '510500.SH', '510050.SH']`，成功触发回调。回调数据为行情快照，包含：time（毫秒时间戳）、lastPrice、open/high/low/lastClose、volume/pvolume/transactionNum、amount、askPrice[5]/bidPrice[5]/askVol[5]/bidVol[5]、volRatio、speed1Min/speed5Min。 | 回调函数同样只接收1个参数 `datas`。全推行情推送速度略快于单只订阅（subscribe_quote），可能因为全推走的是独立推送通道。 |
 
 ## 板块数据
 
@@ -178,7 +183,7 @@
 
 | API 名称 | 状态 | 为什么现在不急着测 | 后续什么情况下再测 |
 | --- | --- | --- | --- |
-| `xtdata.subscribe_whole_quote` | `未测试` | 这是全市场主推，适合做盘中批量扫描；你当前优先目标是先把单标的/小股票池策略和回测跑通。 | 当你开始做全市场条件选股、实时盯盘或板块轮动扫描时再测。 |
+| `xtdata.subscribe_whole_quote` | `可用`（QMT 内已验证） | 2026-04-23 已在 QMT 内通过 `ContextInfo.subscribe_whole_quote` 验证，见实时订阅行情表。外部 Python 版 `xtdata.subscribe_whole_quote` 尚未单独测试。 | 当需要在外部 Python 环境中使用全推行情时再测。 |
 | `xtdata.get_full_kline` | `未测试` | 它偏“最新交易日全推 K 线”场景，当前已有 `get_market_data_ex` 和 `get_local_data` 能支撑回测和基础策略开发。 | 当你需要更强的盘中 K 线更新能力，或发现 `get_market_data_ex` 不够用时再测。 |
 | `xtdata.get_cb_info` | `未测试` | 这是可转债专项信息接口；你现在的主线还是股票策略与回测。 | 当你转向可转债策略、正股-转债联动或可转债池筛选时再测。 |
 | `xtdata.get_ipo_info` | `未测试` | 这是新股信息接口，对普通股票回测主流程不是必需项。 | 当你策略要过滤次新股、新股上市天数，或专门做新股相关研究时再测。 |
@@ -188,6 +193,8 @@
 ## 当前结论摘要
 
 - 2026-04-22 我已在本地亲自跑通：`xtdata` 导入、`xttrader` 导入、历史行情下载、`get_market_data`、`get_market_data_ex`、`get_local_data`、`subscribe_quote`、`xtdata.run` 回调链路、`get_sector_list`、`get_stock_list_in_sector`、`get_instrument_detail`、`get_holidays`、`get_divid_factors`。
+- 2026-04-23 在 QMT 内实测跑通：`ContextInfo.subscribe_quote`（510300.SH tick + 1m 回调）、`ContextInfo.subscribe_whole_quote`（4只ETF全推快照回调）。两种订阅均确认回调数据正常，含价格、成交量/笔数、五档盘口等字段。全推行情推送速度略快于单只订阅。
+- QMT 内订阅回调函数签名注意：只接收1个参数 `datas`，不需要 `ContextInfo`（与 init/handlebar 不同）。
 - `xtdata.download_financial_data` 已在本地复现阻塞，25 秒超时保护内仍无返回。
 - `xtdata.get_trading_calendar` 和 `xtdata.get_period_list` 在当前客户端上不是“没数据”，而是明确“不支持此功能”，错误信息为 `function not realize`。
 - 当前“可用”主要表示接口在当前环境下可调用并返回，不代表交易接口的完整业务链路已验证。
