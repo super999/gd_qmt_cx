@@ -35,6 +35,9 @@ DAILY_PERIOD = "1d"          # 日线级别
 # 退出标志
 running = True
 
+# tick 累计量缓存：用于计算本笔增量（volume/amount 是累计值，非逐笔值）
+_prev_tick = {}  # { stock_code: { 'volume': xxx, 'amount': xxx } }
+
 
 def fmt_price(value):
     """
@@ -142,10 +145,18 @@ def on_tick_data(datas):
       lastPrice, open, high, low, lastClose, amount, volume,
       askPrice[5], bidPrice[5], askVol[5], bidVol[5],
       transactionNum, stockStatus, pe, volRatio, speed1Min, speed5Min
+    
+    注意：volume 和 amount 是当日累计值，本笔增量需用差值计算
     """
-    now = datetime.datetime.now().strftime("%H:%M:%S.%f")[:-3]
+    global _prev_tick
     for stock_code, tick_list in datas.items():
         for tick in tick_list:
+            # 使用 tick 自带的成交时间（毫秒时间戳），而非本地打印时间
+            tick_ts = tick.get('time', 0)
+            if isinstance(tick_ts, (int, float)) and tick_ts > 0:
+                tick_time = datetime.datetime.fromtimestamp(tick_ts / 1000).strftime("%H:%M:%S.%f")[:-3]
+            else:
+                tick_time = "?:?:?.???"
             last_price = tick.get('lastPrice', 'N/A')
             open_price = tick.get('open', 'N/A')
             high = tick.get('high', 'N/A')
@@ -160,22 +171,35 @@ def on_tick_data(datas):
             txn_num = tick.get('transactionNum', 'N/A')
             stock_status = tick.get('stockStatus', 'N/A')
             
+            # 计算本笔增量（volume/amount 是累计值）
+            delta_vol = 'N/A'
+            delta_amt = 'N/A'
+            if isinstance(volume, (int, float)) and isinstance(amount, (int, float)):
+                prev = _prev_tick.get(stock_code)
+                if prev is not None:
+                    dv = volume - prev.get('volume', 0)
+                    da = amount - prev.get('amount', 0)
+                    if dv >= 0:
+                        delta_vol = dv
+                    if da >= 0:
+                        delta_amt = da
+                _prev_tick[stock_code] = {'volume': volume, 'amount': amount}
+            
             # 涨跌幅
             chg_str = fmt_chg(last_price, pre_close)
             
-            # 第一行：时间 + 代码 + 价格核心信息
-            print(f"\n[{now}] [{stock_code}] "
+            # 第一行：成交时间 + 代码 + 价格核心信息
+            print(f"\n[{tick_time}] [{stock_code}] "
                   f"最新: {fmt_price(last_price)} | 涨跌: {chg_str}")
             # 第二行：开高低 + 昨收
             print(f"  开: {fmt_price(open_price)} | "
                   f"高: {fmt_price(high)} | "
                   f"低: {fmt_price(low)} | "
                   f"昨收: {fmt_price(pre_close)}")
-            # 第三行：成交统计
-            print(f"  量: {fmt_vol(volume)} | "
-                  f"额: {fmt_amount(amount)} | "
-                  f"笔数: {txn_num} | "
-                  f"状态: {stock_status}")
+            # 第三行：成交统计（累计 + 本笔增量）
+            print(f"  本笔: {fmt_vol(delta_vol)} / {fmt_amount(delta_amt)} | "
+                  f"累计: {fmt_vol(volume)} / {fmt_amount(amount)} | "
+                  f"笔数: {txn_num}")
             # 第四行：五档盘口
             print(f"  卖五~卖一: {fmt_bid_ask(list(reversed(ask_prices)), list(reversed(ask_vols)))}")
             print(f"  买一~买五: {fmt_bid_ask(bid_prices, bid_vols)}")
@@ -187,10 +211,18 @@ def on_daily_data(datas):
     
     回调数据格式: { stock_code: [data1, data2, ...] }
     每个 data 是一条日K记录
+    
+    日线数据字段：time(毫秒时间戳), open, high, low, close, volume, amount,
+                 settlementPrice, openInterest, dr, totaldr, suspendFlag
     """
-    now = datetime.datetime.now().strftime("%H:%M:%S.%f")[:-3]
     for stock_code, kline_list in datas.items():
         for kline in kline_list:
+            # 使用日线自带的 time 时间戳
+            kline_ts = kline.get('time', 0)
+            if isinstance(kline_ts, (int, float)) and kline_ts > 0:
+                kline_time = datetime.datetime.fromtimestamp(kline_ts / 1000).strftime("%Y-%m-%d %H:%M")
+            else:
+                kline_time = "????-??-??"
             open_p = kline.get('open', 'N/A')
             high_p = kline.get('high', 'N/A')
             low_p = kline.get('low', 'N/A')
@@ -198,7 +230,7 @@ def on_daily_data(datas):
             vol = kline.get('volume', 'N/A')
             amount = kline.get('amount', 'N/A')
             
-            print(f"[{now}] [1D] {stock_code} | "
+            print(f"[{kline_time}] [1D] {stock_code} | "
                   f"开: {fmt_price(open_p)} | 高: {fmt_price(high_p)} | "
                   f"低: {fmt_price(low_p)} | 收: {fmt_price(close_p)} | "
                   f"量: {fmt_vol(vol)} | 额: {fmt_amount(amount)}")
