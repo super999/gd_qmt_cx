@@ -6,7 +6,7 @@
 
 使用方式：
   在 MiniQMT 已登录且处于开盘时间的情况下运行：
-    d:\python_envs\gd_qmt_env\python.exe subscribe_whole_market.py
+    d:\\python_envs\\gd_qmt_env\\python.exe subscribe_whole_market.py
 
 功能：
   1. 模式A：订阅全市场 (SH + SZ)，实时统计推送的标的数量和样本数据
@@ -43,6 +43,10 @@ ETF_LIST = [
     "588000.SH",   # 科创50ETF
 ]
 
+ETF_LIST = [
+    "510300.SH",   # 沪深300ETF 
+]
+
 # 统计相关
 push_count = 0       # 总推送次数
 stock_count = 0      # 累计不同标的数
@@ -51,6 +55,9 @@ start_time = None    # 程序启动时间
 # ================================================
 
 running = True
+
+# tick 累计量缓存：用于计算本笔增量（volume/amount 是累计值，非逐笔值）
+_prev_tick = {}  # { stock_code: { 'volume': xxx, 'amount': xxx } }
 
 
 def fmt_price(value):
@@ -157,7 +164,7 @@ def on_whole_market_data(datas):
     
     全市场模式下推送量很大，这里只做统计 + 打印重点标的
     """
-    global push_count, stock_count, stock_set, start_time
+    global push_count, stock_count, stock_set, start_time, _prev_tick
     
     push_count += 1
     current_stocks = set(datas.keys())
@@ -176,18 +183,37 @@ def on_whole_market_data(datas):
     
     # 打印重点标的的行情（如果在本次推送中）
     focus_codes = {"510300.SH", "510050.SH", "000001.SZ", "600519.SH"}
+    # focus_codes = {"510300.SH"}
     for code in focus_codes:
         if code in datas:
             data = datas[code]
+            # 使用 tick 自带的成交时间
+            tick_ts = data.get('time', 0)
+            if isinstance(tick_ts, (int, float)) and tick_ts > 0:
+                focus_time = datetime.datetime.fromtimestamp(tick_ts / 1000).strftime("%H:%M:%S")
+            else:
+                focus_time = now
             last_price = data.get('lastPrice', 'N/A')
             pre_close = data.get('lastClose', 'N/A')
             volume = data.get('volume', 'N/A')
             amount = data.get('amount', 'N/A')
             name = data.get('instrumentName', '')
             chg_str = fmt_chg(last_price, pre_close)
-            print(f"  [{now}] [FOCUS] {code} {name} | "
+            
+            # 计算本笔增量
+            delta_vol = 'N/A'
+            if isinstance(volume, (int, float)) and isinstance(amount, (int, float)):
+                prev = _prev_tick.get(code)
+                if prev is not None:
+                    dv = volume - prev.get('volume', 0)
+                    if dv >= 0:
+                        delta_vol = dv
+                _prev_tick[code] = {'volume': volume, 'amount': amount}
+            
+            print(f"  [{focus_time}] [FOCUS] {code} {name} | "
                   f"最新: {fmt_price(last_price)} | 涨跌: {chg_str} | "
-                  f"量: {fmt_vol(volume)} | 额: {fmt_amount(amount)}")
+                  f"本笔: {fmt_vol(delta_vol)} | "
+                  f"累计: {fmt_vol(volume)} / {fmt_amount(amount)}")
 
 
 def on_etf_list_data(datas):
@@ -199,13 +225,19 @@ def on_etf_list_data(datas):
     
     ETF列表模式下标的少，逐个打印详细信息（含五档盘口）
     """
-    global push_count, start_time
+    global push_count, start_time, _prev_tick
     
     push_count += 1
-    now = datetime.datetime.now().strftime("%H:%M:%S.%f")[:-3]
     elapsed = (datetime.datetime.now() - start_time).total_seconds() if start_time else 0
     
     for code, data in datas.items():
+        # 使用 tick 自带的成交时间
+        tick_ts = data.get('time', 0)
+        if isinstance(tick_ts, (int, float)) and tick_ts > 0:
+            tick_time = datetime.datetime.fromtimestamp(tick_ts / 1000).strftime("%H:%M:%S.%f")[:-3]
+        else:
+            tick_time = datetime.datetime.now().strftime("%H:%M:%S.%f")[:-3]
+        
         last_price = data.get('lastPrice', 'N/A')
         volume = data.get('volume', 'N/A')
         amount = data.get('amount', 'N/A')
@@ -220,20 +252,34 @@ def on_etf_list_data(datas):
         txn_num = data.get('transactionNum', 'N/A')
         name = data.get('instrumentName', '')
         
+        # 计算本笔增量
+        delta_vol = 'N/A'
+        delta_amt = 'N/A'
+        if isinstance(volume, (int, float)) and isinstance(amount, (int, float)):
+            prev = _prev_tick.get(code)
+            if prev is not None:
+                dv = volume - prev.get('volume', 0)
+                da = amount - prev.get('amount', 0)
+                if dv >= 0:
+                    delta_vol = dv
+                if da >= 0:
+                    delta_amt = da
+            _prev_tick[code] = {'volume': volume, 'amount': amount}
+        
         # 涨跌幅
         chg_str = fmt_chg(last_price, pre_close)
         
-        # 第一行：时间 + 代码 + 价格核心信息
-        print(f"\n[{now}] [{code}] {name} | "
+        # 第一行：成交时间 + 代码 + 价格核心信息
+        print(f"\n[{tick_time}] [{code}] {name} | "
               f"最新: {fmt_price(last_price)} | 涨跌: {chg_str}")
         # 第二行：开高低 + 昨收
         print(f"  开: {fmt_price(open_p)} | "
               f"高: {fmt_price(high_p)} | "
               f"低: {fmt_price(low_p)} | "
               f"昨收: {fmt_price(pre_close)}")
-        # 第三行：成交统计
-        print(f"  量: {fmt_vol(volume)} | "
-              f"额: {fmt_amount(amount)} | "
+        # 第三行：成交统计（本笔增量 + 累计）
+        print(f"  本笔: {fmt_vol(delta_vol)} / {fmt_amount(delta_amt)} | "
+              f"累计: {fmt_vol(volume)} / {fmt_amount(amount)} | "
               f"笔数: {txn_num}")
         # 第四行：五档盘口
         print(f"  卖五~卖一: {fmt_bid_ask(list(reversed(ask_prices)), list(reversed(ask_vols)))}")
