@@ -1,0 +1,4 @@
+﻿label_name,candidate_count,positive_count,negative_count,positive_ratio
+n5_r3,135,25,110,0.185185
+n10_r3,135,30,105,0.222222
+n10_r5,135,16,119,0.118519

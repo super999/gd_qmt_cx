@@ -28,8 +28,8 @@ Two environments are configured:
 
 ## Code Structure
 
-- `python/` - Original QMT example strategies (encoded/obfuscated)
-  - `多因子选股回测示例.py` - Multi-factor stock selection backtest example
+- `python/` - QMT strategy files and workspace copies
+  - `多因子选股回测示例.py` - Readable workspace copy of the multi-factor example
   - `沪深300ETF回测策略.py` - CSI 300 ETF backtest strategy
   - `交易实时主推示例.py` - Real-time trading push example
 
@@ -43,7 +43,7 @@ Two environments are configured:
 1. **Minimal changes**: Preserve original function names, variables, and call styles
 2. **No fabricated APIs**: If an interface name is uncertain, use the existing call pattern from the source file
 3. **Verify before modifying**: Confirm facts before proposing changes
-4. **Conservative approach**: Without readable source code, only provide conservative inferences based on common QMT strategy patterns
+4. **Separate source vs runtime**: The workspace copy is readable, but still does not automatically prove that QMT loads exactly the same file at runtime
 
 ## Current Project Status
 
@@ -54,14 +54,19 @@ The project has completed API availability verification:
 - **Unavailable in current client**: `xtdata.get_trading_calendar`, `xtdata.get_period_list`
 - **Untested**: trading connection/account/order chains
 
-See `报告/MiniQMT_API可用性清单.md` for detailed API test results.
+See:
 
-## Roadmap
+- `报告/README.md`
+- `报告/项目管理/文档使用说明.md`
+- `报告/环境与规范/MiniQMT_API可用性清单.md`
 
-1. **Phase 1**: Obtain readable source code or backtest logs from example strategies
-2. **Phase 2**: Analyze the example strategy's rebalancing frequency, stock pool, factor logic, buy/sell conditions
-3. **Phase 3**: Supplement buy/sell logic and add structured debug logging
-4. **Phase 4**: Create a custom strategy with user's own conditions and complete a verified backtest
+## Current Focus
+
+Do not rely on a hard-coded roadmap here. Prefer:
+
+- `报告/项目管理/当前任务与阶段计划.md` for current work
+- `报告/策略设计/当前实际运行策略卡片.md` for the current experimental strategy facts
+- `报告/研究结论/当前主线/` for current research conclusions
 
 ## Common Commands
 

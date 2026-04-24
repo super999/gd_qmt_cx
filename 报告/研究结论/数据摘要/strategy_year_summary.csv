@@ -1,0 +1,4 @@
+﻿year,total_return,win_rate,max_drawdown,closed_trade_count,trade_count,avg_holding_days,intraday_signal_days,pullback_ok_days,intraday_confirmed_days,prepare_buy_days
+2024,0.0,0.0,0.0,0,0,0.0,0,50,0,0
+2025,0.0125,0.5,-0.014625,2,4,4.0,172,35,75,2
+2026,0.009202,1.0,-0.012268,1,2,3.0,72,11,30,1

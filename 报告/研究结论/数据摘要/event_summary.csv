@@ -1,0 +1,5 @@
+﻿label_name,window_days,target_return,candidate_count,positive_event_count_raw,positive_event_count_deduped,first_event_date,last_event_date,avg_future_high_return_raw
+n5_r3,5,0.03,135,25,23,20240118,20260407,0.045178
+n5_r5,5,0.05,135,6,6,20240202,20260407,0.071283
+n10_r3,10,0.03,135,30,24,20240118,20260407,0.069385
+n10_r5,10,0.05,135,16,14,20240118,20260407,0.094767
