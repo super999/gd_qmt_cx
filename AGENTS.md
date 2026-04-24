@@ -69,6 +69,16 @@
   `code/backtest/outputs/analyze_510300_research/510300单标的数据分析与研究结论.md`
 - 510300 低吸反弹事件定义与研究计划：
   `报告/510300低吸反弹事件定义与研究计划.md`
+- 510300 低吸反弹事件前特征分析：
+  `code/backtest/outputs/analyze_510300_rebound_features/510300低吸反弹事件前特征分析.md`
+- 510300 低吸反弹事件日前窗口剖面分析：
+  `code/backtest/outputs/analyze_510300_event_profiles/510300低吸反弹事件日前窗口剖面分析.md`
+- 510300 多时间框架 V 字结构分析：
+  `code/backtest/outputs/analyze_510300_v_reversal_multiframe/510300多时间框架V字结构分析.md`
+- n5_r3 首版 V 字结构评分模型：
+  `code/backtest/outputs/build_n5_r3_vscore_model/n5_r3首版V字结构评分模型.md`
+- 特征字段中文对照：
+  `报告/特征字段中文对照.md`
 - ETF 低吸反弹主路线执行计划：
   `报告/低吸反弹主路线执行计划.md`
 - 策略说明书 v1：
@@ -89,3 +99,4 @@
   - `报告/当前实际运行策略卡片.md`
   - `报告/当前任务与阶段计划.md`
 - 若后续要修改买点、卖点、持有天数、核心参数或默认标的，应先更新文档并等待用户确认，再改代码。
+- 分析输出若包含英文特征字段名，应尽量同时补中文说明列，避免只输出英文 ID。
