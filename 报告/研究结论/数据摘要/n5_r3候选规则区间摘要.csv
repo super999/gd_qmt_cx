@@ -1,0 +1,4 @@
+﻿band_name,background_min,trigger_min,sample_count,positive_count,negative_count,positive_ratio,positive_coverage
+候选A-严格,3.0,2.0,8.0,8.0,0.0,1.0,0.615385
+候选B-平衡,3.0,1.0,10.0,9.0,1.0,0.9,0.692308
+候选C-触发优先,1.0,6.0,5.0,5.0,0.0,1.0,0.384615
