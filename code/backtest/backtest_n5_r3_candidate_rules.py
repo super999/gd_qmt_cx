@@ -24,6 +24,25 @@ STOP_LOSS_PCT = 0.03
 TAKE_PROFIT_PCT = 0.03
 LOW_BREAK_TOLERANCE = 0.001
 
+EXIT_POLICIES = [
+    {
+        "name": "n5_r3_exit",
+        "label": "n5_r3退出",
+        "max_hold_days": 5,
+        "stop_loss_pct": 0.03,
+        "take_profit_pct": 0.03,
+        "low_break_tolerance": 0.001,
+    },
+    {
+        "name": "dev_7d_4pct_exit",
+        "label": "实验版7日4%退出",
+        "max_hold_days": 7,
+        "stop_loss_pct": 0.03,
+        "take_profit_pct": 0.04,
+        "low_break_tolerance": 0.001,
+    },
+]
+
 CANDIDATE_A = {
     "name": "candidate_a_strict",
     "label": "候选A-严格",
@@ -201,20 +220,20 @@ def build_cached_hit_labels(row, rules, point_cols):
     return " | ".join(labels)
 
 
-def evaluate_exit(row, entry_price, entry_signal_low, holding_days):
+def evaluate_exit(row, entry_price, entry_signal_low, holding_days, exit_policy):
     reasons = []
-    if float(row["close"]) <= entry_price * (1 - STOP_LOSS_PCT):
+    if float(row["close"]) <= entry_price * (1 - exit_policy["stop_loss_pct"]):
         reasons.append("收盘触发固定止损")
-    if float(row["low"]) <= entry_signal_low * (1 - LOW_BREAK_TOLERANCE):
+    if float(row["low"]) <= entry_signal_low * (1 - exit_policy["low_break_tolerance"]):
         reasons.append("跌破信号日低点容忍线")
-    if float(row["close"]) >= entry_price * (1 + TAKE_PROFIT_PCT):
+    if float(row["close"]) >= entry_price * (1 + exit_policy["take_profit_pct"]):
         reasons.append("收盘触发目标收益")
-    if holding_days >= MAX_HOLD_DAYS:
-        reasons.append("持有天数达到n5窗口上限")
+    if holding_days >= exit_policy["max_hold_days"]:
+        reasons.append("持有天数达到上限")
     return bool(reasons), reasons
 
 
-def run_single_band(signal_df, band_config):
+def run_single_band(signal_df, band_config, exit_policy):
     cash = INITIAL_CASH
     shares = 0
     entry_price = None
@@ -245,6 +264,7 @@ def run_single_band(signal_df, band_config):
             trades.append(
                 {
                     "band": band_config["label"],
+                    "exit_policy": exit_policy["label"],
                     "signal_date": pending_exit["signal_date"],
                     "trade_date": trade_date,
                     "stock": STOCK,
@@ -278,6 +298,7 @@ def run_single_band(signal_df, band_config):
                 trades.append(
                     {
                         "band": band_config["label"],
+                        "exit_policy": exit_policy["label"],
                         "signal_date": pending_entry["signal_date"],
                         "trade_date": trade_date,
                         "stock": STOCK,
@@ -305,7 +326,9 @@ def run_single_band(signal_df, band_config):
         if idx < len(signal_df) - 1:
             if shares > 0:
                 holding_days = dates.index(trade_date) - dates.index(entry_exec_date) + 1
-                exit_flag, exit_reasons = evaluate_exit(row, entry_price, entry_signal_low, holding_days)
+                exit_flag, exit_reasons = evaluate_exit(
+                    row, entry_price, entry_signal_low, holding_days, exit_policy
+                )
                 if exit_flag:
                     pending_exit = {
                         "signal_date": trade_date,
@@ -334,6 +357,7 @@ def run_single_band(signal_df, band_config):
         daily_records.append(
             {
                 "band": band_config["label"],
+                "exit_policy": exit_policy["label"],
                 "trade_date": trade_date,
                 "stock": STOCK,
                 "open": round(current_open, 4),
@@ -358,7 +382,7 @@ def run_single_band(signal_df, band_config):
     trades_df = pd.DataFrame(trades)
     daily_df = pd.DataFrame(daily_records)
     closed_df = pd.DataFrame(closed_trades)
-    return build_summary(band_config, daily_df, trades_df, closed_df), trades_df, daily_df
+    return build_summary(band_config, exit_policy, daily_df, trades_df, closed_df), trades_df, daily_df
 
 
 def compute_max_drawdown(equity_series):
@@ -381,13 +405,15 @@ def compute_consecutive_losses(trades_df):
     return int(max_streak)
 
 
-def build_summary(band_config, daily_df, trades_df, closed_df):
+def build_summary(band_config, exit_policy, daily_df, trades_df, closed_df):
     final_equity = float(daily_df.iloc[-1]["total_equity"])
     total_return = final_equity / INITIAL_CASH - 1.0
     win_rate = 0.0 if closed_df.empty else float((closed_df["pnl"] > 0).mean())
     avg_holding_days = 0.0 if closed_df.empty else float(closed_df["holding_days"].mean())
     return {
         "band": band_config["label"],
+        "exit_policy_name": exit_policy["name"],
+        "exit_policy_label": exit_policy["label"],
         "stock": STOCK,
         "start_date": START_DATE,
         "end_date": END_DATE,
@@ -404,10 +430,10 @@ def build_summary(band_config, daily_df, trades_df, closed_df):
         "background_min": band_config["background_min"],
         "trigger_min": band_config["trigger_min"],
         "exit_policy": {
-            "max_hold_days": MAX_HOLD_DAYS,
-            "stop_loss_pct": STOP_LOSS_PCT,
-            "take_profit_pct": TAKE_PROFIT_PCT,
-            "low_break_tolerance": LOW_BREAK_TOLERANCE,
+            "max_hold_days": exit_policy["max_hold_days"],
+            "stop_loss_pct": exit_policy["stop_loss_pct"],
+            "take_profit_pct": exit_policy["take_profit_pct"],
+            "low_break_tolerance": exit_policy["low_break_tolerance"],
             "execution": "signals use full-day data; orders execute at next open",
         },
     }
@@ -461,12 +487,13 @@ def main():
     summaries = []
     trades_list = []
     daily_list = []
-    for band_config in [CANDIDATE_A, CANDIDATE_B]:
-        summary, trades_df, daily_df = run_single_band(signal_df, band_config)
-        summary["instrument_name"] = instrument_detail.get("InstrumentName", "")
-        summaries.append(summary)
-        trades_list.append(trades_df)
-        daily_list.append(daily_df)
+    for exit_policy in EXIT_POLICIES:
+        for band_config in [CANDIDATE_A, CANDIDATE_B]:
+            summary, trades_df, daily_df = run_single_band(signal_df, band_config, exit_policy)
+            summary["instrument_name"] = instrument_detail.get("InstrumentName", "")
+            summaries.append(summary)
+            trades_list.append(trades_df)
+            daily_list.append(daily_df)
 
     all_trades = pd.concat(trades_list, ignore_index=True) if trades_list else pd.DataFrame()
     all_daily = pd.concat(daily_list, ignore_index=True) if daily_list else pd.DataFrame()
@@ -474,8 +501,9 @@ def main():
 
     for summary in summaries:
         print(
-            "{}: trades={}, closed={}, return={}, win_rate={}, max_dd={}".format(
+            "{} / {}: trades={}, closed={}, return={}, win_rate={}, max_dd={}".format(
                 summary["band"],
+                summary["exit_policy_label"],
                 summary["trade_count"],
                 summary["closed_trade_count"],
                 summary["total_return"],

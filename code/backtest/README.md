@@ -40,6 +40,11 @@
   - 候选A：`background_score >= 3` 且 `trigger_score >= 2`
   - 候选B：`background_score >= 3` 且 `trigger_score >= 1`
   - 该脚本用于第一轮闭环验证，不等于最终 QMT 实盘策略
+- `backtest_intraday_v_reversal_signal.py`
+  - 盘中即时 V 型反转信号历史回放脚本
+  - 按已完成 `1m/5m` K 线逐步推进
+  - 用当前盘中价格估算当日收盘相关字段
+  - 用于验证“盘中触发即提示”是否可行
 
 注意：
 

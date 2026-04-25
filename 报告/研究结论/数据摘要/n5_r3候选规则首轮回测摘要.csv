@@ -1,3 +1,5 @@
-band,trade_count,closed_trade_count,total_return,win_rate,max_drawdown,avg_holding_days,max_consecutive_losses
-候选A-严格,12,6,0.094218,0.833333,-0.021857,5.0,1
-候选B-平衡,14,7,0.109898,0.857143,-0.021857,4.4286,1
+band,exit_policy,trade_count,closed_trade_count,total_return,win_rate,max_drawdown,avg_holding_days,max_consecutive_losses
+候选A-严格,n5_r3退出,12,6,0.094218,0.833333,-0.021857,5.0,1
+候选B-平衡,n5_r3退出,14,7,0.109898,0.857143,-0.021857,4.4286,1
+候选A-严格,实验版7日4%退出,12,6,0.079238,0.666667,-0.021857,6.6667,1
+候选B-平衡,实验版7日4%退出,14,7,0.094726,0.714286,-0.021857,5.8571,1
