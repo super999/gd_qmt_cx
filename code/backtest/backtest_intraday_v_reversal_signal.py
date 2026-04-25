@@ -15,6 +15,7 @@ START_DATE = "20240101"
 END_DATE = "20260424"
 PRICE_ADJUSTMENT = "front"
 DAILY_GATE_MODE = "intraday_estimated_daily_gate"
+TIME_GATE_MODE = "dynamic_low_repair_gate"
 
 INITIAL_CASH = 100000.0
 LOT_SIZE = 100
@@ -24,6 +25,7 @@ STOP_LOSS_PCT = 0.03
 TAKE_PROFIT_PCT = 0.03
 LOW_BREAK_TOLERANCE = 0.001
 MAX_HOLD_DAYS = 5
+TRADE_SETTLEMENT = "T+1"
 
 BACKGROUND_RULES = [
     ("drawdown_from_high_10", "lower", -0.044051),
@@ -166,6 +168,7 @@ def estimate_trigger_features(partial_5m, partial_1m):
         return None
 
     low_pos = int(partial_5m["low"].values.argmin())
+    current_pos = len(partial_5m) - 1
     low_price = float(partial_5m.iloc[low_pos]["low"])
     high_so_far = float(partial_5m["high"].max())
     est_close = float(partial_5m.iloc[-1]["close"])
@@ -188,9 +191,17 @@ def estimate_trigger_features(partial_5m, partial_1m):
     )
 
     low_before_last_quarter = low_pos <= int(EXPECTED_5M_BARS * 0.75) and low_pos <= len(partial_5m) - 3
+    dynamic_wait_bars = compute_dynamic_wait_bars(low_pos)
+    dynamic_min_signal_pos = low_pos + dynamic_wait_bars
+    time_gate_pass = current_pos >= dynamic_min_signal_pos
 
     return {
+        "time_gate_mode": TIME_GATE_MODE,
+        "m5_current_pos": current_pos,
         "m5_low_pos": low_pos,
+        "m5_dynamic_wait_bars": dynamic_wait_bars,
+        "m5_dynamic_min_signal_pos": dynamic_min_signal_pos,
+        "m5_time_gate_pass": int(time_gate_pass),
         "m5_low_before_last_quarter": int(low_before_last_quarter),
         "m5_low_pos_ratio": low_pos / max(EXPECTED_5M_BARS - 1, 1),
         "m5_rebound_to_est_close": est_close / low_price - 1.0 if low_price else 0.0,
@@ -200,6 +211,12 @@ def estimate_trigger_features(partial_5m, partial_1m):
         "m1_up_close_streak_after_low": m1_up_streak,
         "signal_low": low_price,
     }
+
+
+def compute_dynamic_wait_bars(low_pos):
+    remaining_bars = max(EXPECTED_5M_BARS - low_pos - 1, 1)
+    wait_bars = int(round(remaining_bars * 0.18))
+    return max(2, min(6, wait_bars))
 
 
 def build_intraday_signals(daily, data_1m, data_5m):
@@ -232,6 +249,8 @@ def build_intraday_signals(daily, data_1m, data_5m):
 
             background_score, bg_hits = score_rules(daily_features, BACKGROUND_RULES)
             trigger_score, trigger_hits = score_rules(trigger_features, TRIGGER_RULES)
+            if not trigger_features["m5_time_gate_pass"]:
+                continue
 
             for band in BANDS:
                 if first_hit[band["name"]]:
@@ -248,6 +267,7 @@ def build_intraday_signals(daily, data_1m, data_5m):
                     "band": band["label"],
                     "band_name": band["name"],
                     "daily_gate_mode": DAILY_GATE_MODE,
+                    "time_gate_mode": TIME_GATE_MODE,
                     "trade_date": trade_date,
                     "signal_time": current_time,
                     "signal_bar_pos": pos,
@@ -261,7 +281,7 @@ def build_intraday_signals(daily, data_1m, data_5m):
                     {
                         k: round(float(v), 6)
                         for k, v in trigger_features.items()
-                        if k != "signal_low"
+                        if k not in {"signal_low", "time_gate_mode"}
                     }
                 )
                 item.update(bg_hits)
@@ -283,6 +303,10 @@ def simulate_exit(all_5m, entry_idx, entry_price, signal_low, all_dates):
 
     for idx in range(entry_idx + 1, last_idx + 1):
         row = all_5m.iloc[idx]
+        current_date = str(row["trade_date"])
+        if current_date == entry_date:
+            continue
+
         reasons = []
         close = float(row["close"])
         low = float(row["low"])
@@ -301,6 +325,8 @@ def simulate_exit(all_5m, entry_idx, entry_price, signal_low, all_dates):
         if reasons:
             exit_idx = idx + 1 if idx + 1 < len(all_5m) else idx
             exit_row = all_5m.iloc[exit_idx]
+            if str(exit_row["trade_date"]) == entry_date:
+                continue
             exit_price = float(exit_row["open"]) if exit_idx != idx else close
             return {
                 "exit_idx": int(exit_idx),
@@ -390,6 +416,8 @@ def build_summary(band_signals, trades_df, final_cash):
     return {
         "band": str(band_signals.iloc[0]["band"]),
         "daily_gate_mode": DAILY_GATE_MODE,
+        "time_gate_mode": TIME_GATE_MODE,
+        "trade_settlement": TRADE_SETTLEMENT,
         "signal_count": int(len(band_signals)),
         "closed_trade_count": closed_count,
         "initial_cash": INITIAL_CASH,
@@ -423,6 +451,7 @@ def main():
     print("Running intraday V-reversal signal replay")
     print("stock={}, start={}, end={}".format(STOCK, START_DATE, END_DATE))
     print("daily gate mode:", DAILY_GATE_MODE)
+    print("time gate mode:", TIME_GATE_MODE)
     ensure_history()
 
     daily = build_daily_context(load_price_frame("1d"))
