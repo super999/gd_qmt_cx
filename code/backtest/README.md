@@ -16,6 +16,9 @@
 
 ### 当前主研究脚本
 
+- `find_best_trade_intervals.py`
+  - 当前三步法第 1 步：只用日线扫描近一年最优交易日期区间
+  - 不使用候选A/B，不使用分钟级盘中信号，不调整策略参数
 - `scan_510300_rebound_events.py`
   - 扫描 `510300` 的低吸反弹事件候选样本
 - `analyze_510300_rebound_features.py`
