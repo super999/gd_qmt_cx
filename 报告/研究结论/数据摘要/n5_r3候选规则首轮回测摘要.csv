@@ -1,0 +1,3 @@
+band,trade_count,closed_trade_count,total_return,win_rate,max_drawdown,avg_holding_days,max_consecutive_losses
+候选A-严格,12,6,0.094218,0.833333,-0.021857,5.0,1
+候选B-平衡,14,7,0.109898,0.857143,-0.021857,4.4286,1

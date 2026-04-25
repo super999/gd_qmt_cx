@@ -35,6 +35,11 @@
 
 - `minimal_stock_backtest.py`
   - 当前实验版单标的回测脚本
+- `backtest_n5_r3_candidate_rules.py`
+  - 当前 `n5_r3` 候选A/候选B 显式规则回测脚本
+  - 候选A：`background_score >= 3` 且 `trigger_score >= 2`
+  - 候选B：`background_score >= 3` 且 `trigger_score >= 1`
+  - 该脚本用于第一轮闭环验证，不等于最终 QMT 实盘策略
 
 注意：
 
