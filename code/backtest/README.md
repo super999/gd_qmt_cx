@@ -22,6 +22,9 @@
 - `analyze_best_interval_entry_signals.py`
   - 当前三步法第 2 步：分析优质交易区间买入日的日线背景与盘中特征
   - 使用正样本/对照样本的标准化差异、单特征AUC、Mann-Whitney检验排序
+- `backtest_statistical_entry_rules.py`
+  - 当前三步法第 3 步：将统计特征整理成候选买入规则并做回测验证
+  - 不沿用旧强 V 规则；输出逐信号观察和非重叠策略回测两类结果
 - `scan_510300_rebound_events.py`
   - 扫描 `510300` 的低吸反弹事件候选样本
 - `analyze_510300_rebound_features.py`
