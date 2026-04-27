@@ -28,6 +28,9 @@
 - `backtest_intraday_statistical_warning.py`
   - 将表现较稳的日线弱势低位规则改写为盘中5分钟预警历史回放
   - 只使用前一日已确认日线背景和当前已完成5分钟K线
+- `backtest_intraday_entry_offsets.py`
+  - 当前五步路线第 4 步：验证盘中预警后第 1/2/3 根 5m K线开盘买入
+  - 用于决定盘中真实买入口径是否可进入卖点设计
 - `scan_510300_rebound_events.py`
   - 扫描 `510300` 的低吸反弹事件候选样本
 - `analyze_510300_rebound_features.py`
