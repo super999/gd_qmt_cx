@@ -569,6 +569,7 @@ def load_state(path):
     state_path = Path(path)
     if not state_path.exists():
         return {
+            "active_trade_date": "",
             "warning_signal_time": "",
             "warning_bar_time": "",
             "entry_candidates_emitted": [],
@@ -580,6 +581,7 @@ def load_state(path):
         return json.loads(state_path.read_text(encoding="utf-8"))
     except Exception:
         return {
+            "active_trade_date": "",
             "warning_signal_time": "",
             "warning_bar_time": "",
             "entry_candidates_emitted": [],
@@ -627,6 +629,13 @@ def trade_dates_seen(daily, data_5m):
 
 def maybe_emit_live_events(args, state, daily, data_5m, trade_date):
     trade_date = str(trade_date)
+    if state.get("active_trade_date") != trade_date:
+        state["active_trade_date"] = trade_date
+        state["warning_signal_time"] = ""
+        state["warning_bar_time"] = ""
+        state["entry_candidates_emitted"] = []
+        state["last_status_time"] = ""
+
     bars = data_5m[data_5m["trade_date"].astype(str) == trade_date].copy().reset_index(drop=True)
     if bars.empty:
         return state
