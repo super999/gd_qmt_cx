@@ -427,6 +427,7 @@ class MonitorGui:
         for key, label, width in columns:
             tree.heading(key, text=label)
             tree.column(key, width=width, minwidth=60, stretch=(key == "message"))
+        self._configure_event_tags(tree)
 
         yscroll = ttk.Scrollbar(table_frame, orient=tk.VERTICAL, command=tree.yview)
         xscroll = ttk.Scrollbar(table_frame, orient=tk.HORIZONTAL, command=tree.xview)
@@ -453,12 +454,14 @@ class MonitorGui:
                     for key, _, _ in columns:
                         if key == "event_time":
                             values.append(self._format_event_time(row.get(key, "")))
+                        elif key == "event_label":
+                            values.append(self._event_display_label(row.get(key, "")))
                         else:
                             values.append(self._cell(row.get(key, "")))
-                    item = tree.insert("", tk.END, values=values)
+                    item = tree.insert("", tk.END, values=values, tags=(self._event_row_tag(row),))
                     row_by_item[item] = row
             else:
-                item = tree.insert("", tk.END, values=["", "无事件", "", "", "", "", "当前筛选条件下没有事件。"])
+                item = tree.insert("", tk.END, values=["", "无事件", "", "", "", "", "当前筛选条件下没有事件。"], tags=("muted",))
                 row_by_item[item] = None
             count_var.set(self._event_count_text(view))
 
@@ -473,6 +476,17 @@ class MonitorGui:
         filter_box.bind("<<ComboboxSelected>>", lambda _event: reload_table())
         tree.bind("<Double-1>", on_double_click)
         reload_table()
+
+        self._add_legend(
+            outer,
+            [
+                ("● 买入预警", "#b45f06"),
+                ("◆ 候选买入", "#2457a6"),
+                ("▲ 模拟买入", "#c00000"),
+                ("■ 退出提示", "#008060"),
+                ("× 跳过", "#666666"),
+            ],
+        )
 
         buttons = ttk.Frame(outer)
         buttons.pack(fill=tk.X, pady=(8, 0))
@@ -506,6 +520,7 @@ class MonitorGui:
         filter_box.pack(side=tk.RIGHT, padx=(0, 8))
 
         columns = [
+            ("result", "结果", 70),
             ("position_id", "持仓号", 70),
             ("signal_time", "预警时间", 170),
             ("entry_time", "买入时间", 170),
@@ -522,6 +537,7 @@ class MonitorGui:
         for key, label, width in columns:
             tree.heading(key, text=label)
             tree.column(key, width=width, minwidth=60, stretch=(key in {"signal_time", "entry_time", "exit_time"}))
+        self._configure_trade_tags(tree)
 
         yscroll = ttk.Scrollbar(table_frame, orient=tk.VERTICAL, command=tree.yview)
         xscroll = ttk.Scrollbar(table_frame, orient=tk.HORIZONTAL, command=tree.xview)
@@ -543,6 +559,8 @@ class MonitorGui:
             return rows
 
         def format_value(row, key):
+            if key == "result":
+                return self._trade_result_text(row)
             if key in {"signal_time", "entry_time", "exit_time"}:
                 return self._format_event_time(row.get(key, ""))
             if key in {"return_pct", "mae_pct", "mfe_pct"}:
@@ -556,10 +574,10 @@ class MonitorGui:
             if view:
                 for row in view:
                     values = [format_value(row, key) for key, _, _ in columns]
-                    item = tree.insert("", tk.END, values=values)
+                    item = tree.insert("", tk.END, values=values, tags=(self._trade_row_tag(row),))
                     row_by_item[item] = row
             else:
-                item = tree.insert("", tk.END, values=["", "无模拟持仓", "", "", "", "", "", "", ""])
+                item = tree.insert("", tk.END, values=["无", "", "无模拟持仓", "", "", "", "", "", "", ""], tags=("muted",))
                 row_by_item[item] = None
             count_var.set(self._trade_count_text(view))
 
@@ -575,6 +593,16 @@ class MonitorGui:
         tree.bind("<Double-1>", on_double_click)
         reload_table()
 
+        self._add_legend(
+            outer,
+            [
+                ("盈利红色", "#c00000"),
+                ("亏损绿色", "#008000"),
+                ("持平灰色", "#666666"),
+                ("双击明细可看买入日 K 线", "#2457a6"),
+            ],
+        )
+
         buttons = ttk.Frame(outer)
         buttons.pack(fill=tk.X, pady=(8, 0))
         ttk.Button(buttons, text="刷新", command=lambda: self._reload_trade_table(window)).pack(side=tk.LEFT)
@@ -584,6 +612,69 @@ class MonitorGui:
     def _reload_trade_table(self, window):
         window.destroy()
         self.show_replay_trades()
+
+    def _add_legend(self, parent, items):
+        legend = ttk.Frame(parent)
+        legend.pack(fill=tk.X, pady=(6, 0))
+        for text, color in items:
+            tk.Label(legend, text=text, foreground=color).pack(side=tk.LEFT, padx=(0, 14))
+
+    def _configure_event_tags(self, tree):
+        tree.tag_configure("buy_warning", foreground="#b45f06")
+        tree.tag_configure("entry_candidate", foreground="#2457a6")
+        tree.tag_configure("sim_buy", foreground="#c00000")
+        tree.tag_configure("exit_reminder", foreground="#008060")
+        tree.tag_configure("skip", foreground="#666666")
+        tree.tag_configure("muted", foreground="#888888")
+
+    def _event_row_tag(self, row):
+        label = row.get("event_label", "")
+        if label == "买入预警":
+            return "buy_warning"
+        if label == "候选买入提示":
+            return "entry_candidate"
+        if label == "模拟买入":
+            return "sim_buy"
+        if label == "退出提示":
+            return "exit_reminder"
+        if "跳过" in label:
+            return "skip"
+        return "muted"
+
+    def _event_display_label(self, label):
+        label = self._cell(label)
+        icons = {
+            "买入预警": "●",
+            "候选买入提示": "◆",
+            "模拟买入": "▲",
+            "退出提示": "■",
+            "候选买入跳过": "×",
+            "模拟买入跳过": "×",
+        }
+        icon = icons.get(label, "")
+        return "{} {}".format(icon, label).strip()
+
+    def _configure_trade_tags(self, tree):
+        tree.tag_configure("profit", foreground="#c00000")
+        tree.tag_configure("loss", foreground="#008000")
+        tree.tag_configure("flat", foreground="#666666")
+        tree.tag_configure("muted", foreground="#888888")
+
+    def _trade_row_tag(self, row):
+        value = self._float(row.get("return_pct"))
+        if value > 0:
+            return "profit"
+        if value < 0:
+            return "loss"
+        return "flat"
+
+    def _trade_result_text(self, row):
+        value = self._float(row.get("return_pct"))
+        if value > 0:
+            return "盈利"
+        if value < 0:
+            return "亏损"
+        return "持平"
 
     def _trade_count_text(self, rows):
         if not rows:
