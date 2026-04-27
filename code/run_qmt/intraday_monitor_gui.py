@@ -9,6 +9,7 @@
 """
 
 import calendar
+import csv
 import os
 import queue
 import subprocess
@@ -118,6 +119,7 @@ class MonitorGui:
 
         row4 = ttk.Frame(actions)
         row4.pack(fill=tk.X, padx=8, pady=(0, 8))
+        ttk.Button(row4, text="查看 replay 事件表", command=self.show_replay_events).pack(side=tk.LEFT)
         ttk.Button(row4, text="打开 replay 事件日志", command=lambda: self.open_path(EVENT_CSV)).pack(side=tk.LEFT)
         ttk.Button(row4, text="打开 replay 买卖明细", command=lambda: self.open_path(TRADE_CSV)).pack(side=tk.LEFT, padx=(8, 0))
         ttk.Button(row4, text="打开 live 事件日志", command=lambda: self.open_path(LIVE_EVENT_CSV)).pack(side=tk.LEFT, padx=(8, 0))
@@ -267,6 +269,101 @@ class MonitorGui:
             messagebox.showinfo("文件不存在", "还没有生成：\n{}".format(path))
             return
         os.startfile(str(path))
+
+    def show_replay_events(self):
+        if not EVENT_CSV.exists():
+            messagebox.showinfo("文件不存在", "还没有生成 replay 事件日志。\n请先运行一次 replay。")
+            return
+        rows = self._read_csv(EVENT_CSV)
+        self._show_event_table(rows)
+
+    def _read_csv(self, path):
+        with Path(path).open("r", encoding="utf-8-sig", newline="") as file_obj:
+            return list(csv.DictReader(file_obj))
+
+    def _show_event_table(self, rows):
+        window = tk.Toplevel(self.root)
+        window.title("replay 事件日志表")
+        window.geometry("1180x640")
+
+        outer = ttk.Frame(window, padding=10)
+        outer.pack(fill=tk.BOTH, expand=True)
+
+        title = ttk.Label(
+            outer,
+            text="replay 事件日志",
+            font=("Microsoft YaHei UI", 12, "bold"),
+        )
+        title.pack(anchor=tk.W)
+
+        count_text = self._event_count_text(rows)
+        ttk.Label(outer, text=count_text).pack(anchor=tk.W, pady=(4, 8))
+
+        columns = [
+            ("event_time", "时间", 140),
+            ("event_label", "事件", 100),
+            ("price", "价格", 80),
+            ("entry_offset_bars", "第几根5m", 80),
+            ("position_id", "持仓号", 70),
+            ("status", "状态", 100),
+            ("message", "说明", 620),
+        ]
+
+        table_frame = ttk.Frame(outer)
+        table_frame.pack(fill=tk.BOTH, expand=True)
+        tree = ttk.Treeview(
+            table_frame,
+            columns=[col[0] for col in columns],
+            show="headings",
+            height=22,
+        )
+        for key, label, width in columns:
+            tree.heading(key, text=label)
+            tree.column(key, width=width, minwidth=60, stretch=(key == "message"))
+
+        yscroll = ttk.Scrollbar(table_frame, orient=tk.VERTICAL, command=tree.yview)
+        xscroll = ttk.Scrollbar(table_frame, orient=tk.HORIZONTAL, command=tree.xview)
+        tree.configure(yscrollcommand=yscroll.set, xscrollcommand=xscroll.set)
+        tree.grid(row=0, column=0, sticky="nsew")
+        yscroll.grid(row=0, column=1, sticky="ns")
+        xscroll.grid(row=1, column=0, sticky="ew")
+        table_frame.columnconfigure(0, weight=1)
+        table_frame.rowconfigure(0, weight=1)
+
+        if rows:
+            for row in rows:
+                values = [self._cell(row.get(key, "")) for key, _, _ in columns]
+                tree.insert("", tk.END, values=values)
+        else:
+            tree.insert("", tk.END, values=["", "无事件", "", "", "", "", "当前 replay 没有触发任何事件。"])
+
+        buttons = ttk.Frame(outer)
+        buttons.pack(fill=tk.X, pady=(8, 0))
+        ttk.Button(buttons, text="刷新", command=lambda: self._reload_event_table(window)).pack(side=tk.LEFT)
+        ttk.Button(buttons, text="打开 CSV", command=lambda: self.open_path(EVENT_CSV)).pack(side=tk.LEFT, padx=(8, 0))
+        ttk.Button(buttons, text="关闭", command=window.destroy).pack(side=tk.RIGHT)
+
+    def _reload_event_table(self, window):
+        window.destroy()
+        self.show_replay_events()
+
+    def _event_count_text(self, rows):
+        if not rows:
+            return "事件数量：0"
+        counts = {}
+        for row in rows:
+            label = row.get("event_label", "") or row.get("event_type", "")
+            counts[label] = counts.get(label, 0) + 1
+        parts = ["{} {}".format(label, count) for label, count in sorted(counts.items())]
+        return "事件数量：{}；{}".format(len(rows), "，".join(parts))
+
+    def _cell(self, value):
+        if value is None:
+            return ""
+        text = str(value)
+        if text.lower() == "nan":
+            return ""
+        return text
 
     def _valid_date(self, text):
         if len(text) != 8 or not text.isdigit():
