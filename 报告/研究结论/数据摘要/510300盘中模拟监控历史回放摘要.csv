@@ -1,2 +1,2 @@
 ﻿trade_count,month_count,win_rate,avg_return,median_return,compounded_return,min_return,avg_mae,worst_mae,avg_mfe
-1,1,1.0,0.033925,0.033925,0.033925,0.033925,-0.004493,-0.004493,0.034374
+4,3,1.0,0.016054,0.014811,0.06549,0.000667,-0.010944,-0.016082,0.018221

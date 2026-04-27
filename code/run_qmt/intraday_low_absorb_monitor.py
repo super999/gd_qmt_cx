@@ -40,9 +40,6 @@ from analyze_best_interval_entry_signals import END_DATE, START_DATE, STOCK, add
 from backtest_intraday_entry_offsets import build_bar_index  # noqa: E402
 from backtest_intraday_statistical_warning import (  # noqa: E402
     RULES,
-    build_daily_dataset,
-    ensure_history,
-    load_5m_frame,
     partial_intraday_features,
     replay_intraday_signals,
     rule_passes,
@@ -63,6 +60,34 @@ LIVE_EVENT_CSV = OUTPUT_DIR / "live_event_log.csv"
 LIVE_STATE_PATH = OUTPUT_DIR / "live_state.json"
 LIVE_EXIT_TIME = "145500"
 LIVE_BAR_COUNT = 160
+PRICE_ADJUSTMENT = "front"
+
+EVENT_COLUMNS = [
+    "event_time",
+    "trade_date",
+    "event_type",
+    "event_label",
+    "stock",
+    "price",
+    "entry_offset_bars",
+    "position_id",
+    "status",
+    "message",
+]
+
+TRADE_COLUMNS = [
+    "position_id",
+    "signal_time",
+    "entry_time",
+    "entry_date",
+    "entry_price",
+    "exit_time",
+    "exit_date",
+    "exit_price",
+    "return_pct",
+    "mae_pct",
+    "mfe_pct",
+]
 
 
 def parse_args():
@@ -75,13 +100,76 @@ def parse_args():
     parser.add_argument("--skip-download", action="store_true")
     parser.add_argument("--poll-seconds", type=int, default=30)
     parser.add_argument("--max-loops", type=int, default=0, help="live 模式循环次数；0 表示一直运行")
-    parser.add_argument("--live-date", default="", help="live 调试用交易日，默认按最新 5m K 线日期")
     parser.add_argument("--state-file", default=str(LIVE_STATE_PATH))
     parser.add_argument("--reset-state", action="store_true")
     parser.add_argument("--print-events", action="store_true", help="replay 结束后在控制台打印事件日志明细")
     parser.add_argument("--print-trades", action="store_true", help="replay 结束后在控制台打印模拟持仓明细")
     parser.add_argument("--print-limit", type=int, default=80, help="控制台最多打印多少条明细；0 表示全部")
     return parser.parse_args()
+
+
+def replay_load_end_date(end_date):
+    return max(str(end_date), END_DATE)
+
+
+def ensure_replay_history(stock, end_date):
+    load_end = replay_load_end_date(end_date)
+    for period in ["1d", "5m"]:
+        xtdata.download_history_data(
+            stock,
+            period=period,
+            start_time="20240101",
+            end_time=load_end,
+            incrementally=False,
+        )
+
+
+def load_replay_daily_dataset(stock, end_date):
+    load_end = replay_load_end_date(end_date)
+    base.ensure_history_download([stock], base.DAILY_PERIOD, "20240101", load_end)
+    raw = base.load_price_frame(stock, base.DAILY_PERIOD, "20240101", load_end).copy()
+    raw.index = raw.index.astype(str)
+    raw.index.name = None
+    raw["trade_date"] = raw.index.str[:8]
+    for col in ["open", "high", "low", "close", "volume"]:
+        raw[col] = pd.to_numeric(raw[col], errors="coerce")
+    raw = raw.dropna(subset=["open", "high", "low", "close"]).sort_values("trade_date").reset_index(drop=True)
+    if raw.empty:
+        raise RuntimeError("no daily data for {}".format(stock))
+
+    end_date = str(end_date)
+    if end_date not in set(raw["trade_date"].astype(str)) and end_date > str(raw.iloc[-1]["trade_date"]):
+        prev = raw.iloc[-1].copy()
+        dummy = prev.copy()
+        dummy["trade_date"] = end_date
+        dummy["open"] = prev["close"]
+        dummy["high"] = prev["close"]
+        dummy["low"] = prev["close"]
+        dummy["close"] = prev["close"]
+        dummy["volume"] = 0
+        raw = pd.concat([raw, pd.DataFrame([dummy])], ignore_index=True)
+
+    features = add_daily_features(raw)
+    dataset = raw.merge(features, on="trade_date", how="left")
+    return dataset.sort_values("trade_date").reset_index(drop=True)
+
+
+def load_replay_5m_frame(stock, start_date, end_date):
+    load_end = replay_load_end_date(end_date)
+    data = xtdata.get_local_data(
+        field_list=[],
+        stock_list=[stock],
+        period="5m",
+        start_time=min(str(start_date), START_DATE),
+        end_time=load_end,
+        count=-1,
+        dividend_type=PRICE_ADJUSTMENT,
+        fill_data=True,
+    ).get(stock)
+    frame = normalize_price_frame(data)
+    if frame.empty:
+        raise RuntimeError("no 5m data for {}".format(stock))
+    return frame
 
 
 def last_bar_for_date(data_5m, trade_date):
@@ -299,8 +387,10 @@ def build_replay_events(daily, data_5m, start_date, end_date, primary_entry_offs
         )
         available_after_idx = exit_idx
 
-    event_df = pd.DataFrame(events).sort_values(["event_time", "event_type"]).reset_index(drop=True)
-    trade_df = pd.DataFrame(trades)
+    event_df = pd.DataFrame(events, columns=EVENT_COLUMNS)
+    if not event_df.empty:
+        event_df = event_df.sort_values(["event_time", "event_type"]).reset_index(drop=True)
+    trade_df = pd.DataFrame(trades, columns=TRADE_COLUMNS)
     return signals, event_df, trade_df
 
 
@@ -372,7 +462,10 @@ def markdown_table(frame):
 
 
 def write_report(args, signals, events, trades, summary):
-    event_counts = events.groupby(["event_type", "event_label"]).size().reset_index(name="count")
+    if events.empty:
+        event_counts = pd.DataFrame(columns=["event_type", "event_label", "count"])
+    else:
+        event_counts = events.groupby(["event_type", "event_label"]).size().reset_index(name="count")
     sample_cols = [
         "event_time",
         "event_label",
@@ -425,10 +518,10 @@ def write_report(args, signals, events, trades, summary):
 def run_replay(args):
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     if not args.skip_download:
-        ensure_history()
+        ensure_replay_history(args.stock, args.end_date)
 
-    daily = build_daily_dataset()
-    data_5m = load_5m_frame()
+    daily = load_replay_daily_dataset(args.stock, args.end_date)
+    data_5m = load_replay_5m_frame(args.stock, args.start_date, args.end_date)
     signals, events, trades = build_replay_events(
         daily=daily,
         data_5m=data_5m,
@@ -479,38 +572,44 @@ def run_replay(args):
     if args.print_trades:
         print("")
         print("模拟持仓明细：")
-        trade_cols = [
-            "position_id",
-            "signal_time",
-            "entry_time",
-            "entry_price",
-            "exit_time",
-            "exit_price",
-            "return_pct",
-            "mae_pct",
-            "mfe_pct",
-        ]
-        view = trades[trade_cols].copy() if not trades.empty else trades
-        if limit is not None:
-            view = view.head(limit)
-        print(pct_table(view).to_string(index=False))
+        if trades.empty:
+            print("  无模拟持仓。")
+        else:
+            trade_cols = [
+                "position_id",
+                "signal_time",
+                "entry_time",
+                "entry_price",
+                "exit_time",
+                "exit_price",
+                "return_pct",
+                "mae_pct",
+                "mfe_pct",
+            ]
+            view = trades[trade_cols].copy()
+            if limit is not None:
+                view = view.head(limit)
+            print(pct_table(view).to_string(index=False))
 
     if args.print_events:
         print("")
         print("事件日志明细：")
-        event_cols = [
-            "event_time",
-            "event_label",
-            "price",
-            "entry_offset_bars",
-            "position_id",
-            "status",
-            "message",
-        ]
-        view = events[event_cols].copy() if not events.empty else events
-        if limit is not None:
-            view = view.head(limit)
-        print(view.to_string(index=False))
+        if events.empty:
+            print("  无事件日志。")
+        else:
+            event_cols = [
+                "event_time",
+                "event_label",
+                "price",
+                "entry_offset_bars",
+                "position_id",
+                "status",
+                "message",
+            ]
+            view = events[event_cols].copy()
+            if limit is not None:
+                view = view.head(limit)
+            print(view.to_string(index=False))
 
 
 def normalize_price_frame(frame):
@@ -815,25 +914,7 @@ def run_live(args):
         loop += 1
         try:
             data_5m = load_live_5m_frame(args.stock)
-            trade_date = args.live_date or str(data_5m.iloc[-1]["trade_date"])
-            available_dates = sorted(data_5m["trade_date"].astype(str).unique().tolist())
-            if args.live_date and str(args.live_date) not in available_dates:
-                print(
-                    "[{}] live-date={} 不在当前 live 5m 数据窗口内；当前窗口日期={}。"
-                    "如需模拟历史日期，请使用 --mode replay --start-date {} --end-date {}。".format(
-                        datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                        args.live_date,
-                        ",".join(available_dates),
-                        args.live_date,
-                        args.live_date,
-                    )
-                )
-                save_state(state_path, state)
-                if args.max_loops and loop >= args.max_loops:
-                    print("live 模式达到 max_loops={}，退出。".format(args.max_loops))
-                    return
-                time.sleep(max(int(args.poll_seconds), 1))
-                continue
+            trade_date = str(data_5m.iloc[-1]["trade_date"])
             daily = load_live_daily_context(args.stock, trade_date)
             state = maybe_emit_live_events(args, state, daily, data_5m, trade_date)
             save_state(state_path, state)
