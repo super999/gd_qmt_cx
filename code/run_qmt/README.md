@@ -18,10 +18,31 @@
   - 固定使用 `盘中弱势低位-量能修复` 预警
   - 输出信号后第 2/3 根 5m K 线候选买入提示
   - 当前模拟持仓主口径为信号后第 3 根 5m K 线开盘买，第 3 个交易日尾盘退出
+- `intraday_monitor_gui.py`
+  - 图形化启动器
+  - 用按钮调用 `intraday_low_absorb_monitor.py`
+  - 不复制策略逻辑，不单独维护规则
+- `start_intraday_monitor_gui.bat`
+  - 双击或命令行运行即可打开图形化启动器
 
 详细使用说明见：
 
 - `报告/项目管理/盘中模拟监控程序使用手册.md`
+
+## GUI 示例
+
+打开图形界面：
+
+```powershell
+code\run_qmt\start_intraday_monitor_gui.bat
+```
+
+或直接运行：
+
+```powershell
+$env:PYTHONIOENCODING='utf-8'
+& 'd:\python_envs\gd_qmt_env\python.exe' 'code\run_qmt\intraday_monitor_gui.py'
+```
 
 ## replay 示例
 
