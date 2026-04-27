@@ -37,6 +37,13 @@ $env:PYTHONIOENCODING='utf-8'
 & 'd:\python_envs\gd_qmt_env\python.exe' 'code\run_qmt\intraday_low_absorb_monitor.py' --mode replay --start-date 20260101 --end-date 20260424
 ```
 
+控制台打印买卖明细：
+
+```powershell
+$env:PYTHONIOENCODING='utf-8'
+& 'd:\python_envs\gd_qmt_env\python.exe' 'code\run_qmt\intraday_low_absorb_monitor.py' --mode replay --print-trades
+```
+
 ## 输出
 
 - `code/run_qmt/outputs/intraday_low_absorb_monitor/replay_event_log.csv`

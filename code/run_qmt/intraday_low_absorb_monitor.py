@@ -78,6 +78,9 @@ def parse_args():
     parser.add_argument("--live-date", default="", help="live 调试用交易日，默认按最新 5m K 线日期")
     parser.add_argument("--state-file", default=str(LIVE_STATE_PATH))
     parser.add_argument("--reset-state", action="store_true")
+    parser.add_argument("--print-events", action="store_true", help="replay 结束后在控制台打印事件日志明细")
+    parser.add_argument("--print-trades", action="store_true", help="replay 结束后在控制台打印模拟持仓明细")
+    parser.add_argument("--print-limit", type=int, default=80, help="控制台最多打印多少条明细；0 表示全部")
     return parser.parse_args()
 
 
@@ -466,6 +469,48 @@ def run_replay(args):
     (OUTPUT_DIR / "summary.json").write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
     print(json.dumps(meta, ensure_ascii=False, indent=2))
     print(pct_table(summary).to_string(index=False))
+    print("")
+    print("明细文件：")
+    print("  事件日志: {}".format(EVENT_CSV))
+    print("  模拟持仓: {}".format(ROOT_DIR / "报告" / "研究结论" / "数据摘要" / "510300盘中模拟监控历史回放模拟持仓.csv"))
+    print("  摘要: {}".format(SUMMARY_CSV))
+
+    limit = None if int(args.print_limit) == 0 else int(args.print_limit)
+    if args.print_trades:
+        print("")
+        print("模拟持仓明细：")
+        trade_cols = [
+            "position_id",
+            "signal_time",
+            "entry_time",
+            "entry_price",
+            "exit_time",
+            "exit_price",
+            "return_pct",
+            "mae_pct",
+            "mfe_pct",
+        ]
+        view = trades[trade_cols].copy() if not trades.empty else trades
+        if limit is not None:
+            view = view.head(limit)
+        print(pct_table(view).to_string(index=False))
+
+    if args.print_events:
+        print("")
+        print("事件日志明细：")
+        event_cols = [
+            "event_time",
+            "event_label",
+            "price",
+            "entry_offset_bars",
+            "position_id",
+            "status",
+            "message",
+        ]
+        view = events[event_cols].copy() if not events.empty else events
+        if limit is not None:
+            view = view.head(limit)
+        print(view.to_string(index=False))
 
 
 def normalize_price_frame(frame):
@@ -771,6 +816,24 @@ def run_live(args):
         try:
             data_5m = load_live_5m_frame(args.stock)
             trade_date = args.live_date or str(data_5m.iloc[-1]["trade_date"])
+            available_dates = sorted(data_5m["trade_date"].astype(str).unique().tolist())
+            if args.live_date and str(args.live_date) not in available_dates:
+                print(
+                    "[{}] live-date={} 不在当前 live 5m 数据窗口内；当前窗口日期={}。"
+                    "如需模拟历史日期，请使用 --mode replay --start-date {} --end-date {}。".format(
+                        datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                        args.live_date,
+                        ",".join(available_dates),
+                        args.live_date,
+                        args.live_date,
+                    )
+                )
+                save_state(state_path, state)
+                if args.max_loops and loop >= args.max_loops:
+                    print("live 模式达到 max_loops={}，退出。".format(args.max_loops))
+                    return
+                time.sleep(max(int(args.poll_seconds), 1))
+                continue
             daily = load_live_daily_context(args.stock, trade_date)
             state = maybe_emit_live_events(args, state, daily, data_5m, trade_date)
             save_state(state_path, state)
