@@ -31,6 +31,9 @@
 - `backtest_intraday_entry_offsets.py`
   - 当前五步路线第 4 步：验证盘中预警后第 1/2/3 根 5m K线开盘买入
   - 用于决定盘中真实买入口径是否可进入卖点设计
+- `backtest_intraday_exit_rules.py`
+  - 当前五步路线第 5 步：在已确认买入口径基础上单独验证卖点
+  - 固定买点为 `盘中弱势低位-量能修复`，只比较时间退出、固定止盈止损、移动保护等卖点
 - `scan_510300_rebound_events.py`
   - 扫描 `510300` 的低吸反弹事件候选样本
 - `analyze_510300_rebound_features.py`
