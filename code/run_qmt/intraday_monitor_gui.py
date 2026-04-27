@@ -112,6 +112,7 @@ class MonitorGui:
         row3.pack(fill=tk.X, padx=8, pady=8)
         ttk.Button(row3, text="收盘后查今天", command=self.replay_today).pack(side=tk.LEFT)
         ttk.Button(row3, text="查指定日期", command=self.replay_single_date).pack(side=tk.LEFT, padx=(8, 0))
+        ttk.Button(row3, text="查指定区间", command=self.replay_custom_range).pack(side=tk.LEFT, padx=(8, 0))
         ttk.Button(row3, text="查过去3个月", command=self.replay_last_3_months).pack(side=tk.LEFT, padx=(8, 0))
         ttk.Button(row3, text="live 查一次", command=self.live_once).pack(side=tk.LEFT, padx=(24, 0))
         ttk.Button(row3, text="启动 live 持续盯盘", command=self.live_start).pack(side=tk.LEFT, padx=(8, 0))
@@ -168,6 +169,22 @@ class MonitorGui:
         args = ["--mode", "replay", "--start-date", start, "--end-date", end]
         self._add_replay_options(args)
         self.run_command(args, "replay 过去3个月 {}-{}".format(start, end), replace_existing=True)
+
+    def replay_custom_range(self):
+        start = self.start_var.get().strip()
+        end = self.end_var.get().strip()
+        if not self._valid_date(start):
+            messagebox.showerror("日期错误", "区间开始必须是 YYYYMMDD，例如 20260127")
+            return
+        if not self._valid_date(end):
+            messagebox.showerror("日期错误", "区间结束必须是 YYYYMMDD，例如 20260427")
+            return
+        if start > end:
+            messagebox.showerror("日期错误", "区间开始不能晚于区间结束。")
+            return
+        args = ["--mode", "replay", "--start-date", start, "--end-date", end]
+        self._add_replay_options(args)
+        self.run_command(args, "replay 指定区间 {}-{}".format(start, end), replace_existing=True)
 
     def live_once(self):
         args = ["--mode", "live", "--max-loops", "1"]
@@ -332,7 +349,12 @@ class MonitorGui:
 
         if rows:
             for row in rows:
-                values = [self._cell(row.get(key, "")) for key, _, _ in columns]
+                values = []
+                for key, _, _ in columns:
+                    if key == "event_time":
+                        values.append(self._format_event_time(row.get(key, "")))
+                    else:
+                        values.append(self._cell(row.get(key, "")))
                 tree.insert("", tk.END, values=values)
         else:
             tree.insert("", tk.END, values=["", "无事件", "", "", "", "", "当前 replay 没有触发任何事件。"])
@@ -364,6 +386,17 @@ class MonitorGui:
         if text.lower() == "nan":
             return ""
         return text
+
+    def _format_event_time(self, value):
+        text = self._cell(value)
+        if len(text) < 12 or not text[:12].isdigit():
+            return text
+        year = text[:4]
+        month = text[4:6]
+        day = text[6:8]
+        hour = text[8:10]
+        minute = text[10:12]
+        return "{}年{}月{}日 {}:{}".format(year, month, day, hour, minute)
 
     def _valid_date(self, text):
         if len(text) != 8 or not text.isdigit():
