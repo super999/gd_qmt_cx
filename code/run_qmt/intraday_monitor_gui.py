@@ -168,7 +168,7 @@ class MonitorGui:
         row4.pack(fill=tk.X, padx=8, pady=(0, 8))
         ttk.Button(row4, text="查看 replay 事件表", command=self.show_replay_events).pack(side=tk.LEFT)
         ttk.Button(row4, text="查看 live 事件表", command=self.show_live_events).pack(side=tk.LEFT, padx=(8, 0))
-        ttk.Button(row4, text="打开 replay 买卖明细", command=lambda: self.open_path(TRADE_CSV)).pack(side=tk.LEFT, padx=(8, 0))
+        ttk.Button(row4, text="查看 replay 买卖明细", command=self.show_replay_trades).pack(side=tk.LEFT, padx=(8, 0))
         ttk.Button(row4, text="打开输出目录", command=lambda: self.open_path(OUTPUT_DIR)).pack(side=tk.LEFT, padx=(8, 0))
         ttk.Button(row4, text="清空窗口输出", command=self.clear_output).pack(side=tk.RIGHT)
 
@@ -368,6 +368,13 @@ class MonitorGui:
     def show_live_events(self):
         self._show_event_window(LIVE_EVENT_CSV, "live 事件日志表")
 
+    def show_replay_trades(self):
+        if not TRADE_CSV.exists():
+            messagebox.showinfo("文件不存在", "还没有生成 replay 买卖明细。\n请先运行一次 replay。")
+            return
+        rows = self._read_csv(TRADE_CSV)
+        self._show_trade_table(rows)
+
     def _show_event_window(self, path, title):
         path = Path(path)
         if not path.exists():
@@ -472,6 +479,139 @@ class MonitorGui:
         ttk.Button(buttons, text="刷新", command=lambda: self._reload_event_table(window, csv_path, title_text)).pack(side=tk.LEFT)
         ttk.Button(buttons, text="打开 CSV", command=lambda: self.open_path(csv_path)).pack(side=tk.LEFT, padx=(8, 0))
         ttk.Button(buttons, text="关闭", command=window.destroy).pack(side=tk.RIGHT)
+
+    def _show_trade_table(self, rows):
+        window = tk.Toplevel(self.root)
+        window.title("replay 买卖明细表")
+        window.geometry("1220x680")
+        row_by_item = {}
+
+        outer = ttk.Frame(window, padding=10)
+        outer.pack(fill=tk.BOTH, expand=True)
+        ttk.Label(outer, text="replay 买卖明细", font=("Microsoft YaHei UI", 12, "bold")).pack(anchor=tk.W)
+
+        top = ttk.Frame(outer)
+        top.pack(fill=tk.X, pady=(4, 8))
+        count_var = tk.StringVar()
+        ttk.Label(top, textvariable=count_var).pack(side=tk.LEFT)
+        ttk.Label(top, text="筛选").pack(side=tk.RIGHT)
+        filter_var = tk.StringVar(value="全部")
+        filter_box = ttk.Combobox(
+            top,
+            textvariable=filter_var,
+            values=["全部", "盈利", "亏损"],
+            width=10,
+            state="readonly",
+        )
+        filter_box.pack(side=tk.RIGHT, padx=(0, 8))
+
+        columns = [
+            ("position_id", "持仓号", 70),
+            ("signal_time", "预警时间", 170),
+            ("entry_time", "买入时间", 170),
+            ("entry_price", "买入价", 80),
+            ("exit_time", "卖出时间", 170),
+            ("exit_price", "卖出价", 80),
+            ("return_pct", "收益率", 90),
+            ("mae_pct", "持仓最大不利波动", 140),
+            ("mfe_pct", "持仓最大有利波动", 140),
+        ]
+        table_frame = ttk.Frame(outer)
+        table_frame.pack(fill=tk.BOTH, expand=True)
+        tree = ttk.Treeview(table_frame, columns=[col[0] for col in columns], show="headings", height=22)
+        for key, label, width in columns:
+            tree.heading(key, text=label)
+            tree.column(key, width=width, minwidth=60, stretch=(key in {"signal_time", "entry_time", "exit_time"}))
+
+        yscroll = ttk.Scrollbar(table_frame, orient=tk.VERTICAL, command=tree.yview)
+        xscroll = ttk.Scrollbar(table_frame, orient=tk.HORIZONTAL, command=tree.xview)
+        tree.configure(yscrollcommand=yscroll.set, xscrollcommand=xscroll.set)
+        tree.grid(row=0, column=0, sticky="nsew")
+        yscroll.grid(row=0, column=1, sticky="ns")
+        xscroll.grid(row=1, column=0, sticky="ew")
+        table_frame.columnconfigure(0, weight=1)
+        table_frame.rowconfigure(0, weight=1)
+
+        def visible_rows():
+            label = filter_var.get()
+            if label == "全部":
+                return rows
+            if label == "盈利":
+                return [row for row in rows if self._float(row.get("return_pct")) > 0]
+            if label == "亏损":
+                return [row for row in rows if self._float(row.get("return_pct")) < 0]
+            return rows
+
+        def format_value(row, key):
+            if key in {"signal_time", "entry_time", "exit_time"}:
+                return self._format_event_time(row.get(key, ""))
+            if key in {"return_pct", "mae_pct", "mfe_pct"}:
+                return self._format_pct(row.get(key, ""))
+            return self._cell(row.get(key, ""))
+
+        def reload_table():
+            tree.delete(*tree.get_children())
+            row_by_item.clear()
+            view = visible_rows()
+            if view:
+                for row in view:
+                    values = [format_value(row, key) for key, _, _ in columns]
+                    item = tree.insert("", tk.END, values=values)
+                    row_by_item[item] = row
+            else:
+                item = tree.insert("", tk.END, values=["", "无模拟持仓", "", "", "", "", "", "", ""])
+                row_by_item[item] = None
+            count_var.set(self._trade_count_text(view))
+
+        def on_double_click(_event):
+            selected = tree.selection()
+            if not selected:
+                return
+            row = row_by_item.get(selected[0])
+            if row:
+                self.show_kline_window(self._trade_row_to_kline_event(row))
+
+        filter_box.bind("<<ComboboxSelected>>", lambda _event: reload_table())
+        tree.bind("<Double-1>", on_double_click)
+        reload_table()
+
+        buttons = ttk.Frame(outer)
+        buttons.pack(fill=tk.X, pady=(8, 0))
+        ttk.Button(buttons, text="刷新", command=lambda: self._reload_trade_table(window)).pack(side=tk.LEFT)
+        ttk.Button(buttons, text="打开 CSV", command=lambda: self.open_path(TRADE_CSV)).pack(side=tk.LEFT, padx=(8, 0))
+        ttk.Button(buttons, text="关闭", command=window.destroy).pack(side=tk.RIGHT)
+
+    def _reload_trade_table(self, window):
+        window.destroy()
+        self.show_replay_trades()
+
+    def _trade_count_text(self, rows):
+        if not rows:
+            return "交易数：0"
+        returns = [self._float(row.get("return_pct")) for row in rows]
+        wins = [value for value in returns if value > 0]
+        losses = [value for value in returns if value < 0]
+        avg_return = sum(returns) / len(returns) if returns else 0.0
+        compounded = 1.0
+        for value in returns:
+            compounded *= 1.0 + value
+        compounded -= 1.0
+        return "交易数：{}；盈利笔数 {}；亏损笔数 {}；平均收益 {}；复合收益 {}".format(
+            len(rows),
+            len(wins),
+            len(losses),
+            self._format_pct(avg_return),
+            self._format_pct(compounded),
+        )
+
+    def _trade_row_to_kline_event(self, row):
+        entry_time = self._cell(row.get("entry_time", ""))
+        return {
+            "event_time": entry_time,
+            "trade_date": self._cell(row.get("entry_date", "")) or entry_time[:8],
+            "event_label": "模拟买入",
+            "price": self._cell(row.get("entry_price", "")),
+        }
 
     def _reload_event_table(self, window, csv_path, title_text):
         window.destroy()
@@ -670,6 +810,15 @@ class MonitorGui:
             return "{:.2%}".format(float(value))
         except Exception:
             return "-"
+
+    def _format_pct(self, value):
+        return self._pct(value)
+
+    def _float(self, value):
+        try:
+            return float(value)
+        except Exception:
+            return 0.0
 
     def _format_event_time(self, value):
         text = self._cell(value)
