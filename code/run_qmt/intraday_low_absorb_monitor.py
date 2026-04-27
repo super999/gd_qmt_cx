@@ -894,6 +894,10 @@ def maybe_emit_live_events(args, state, daily, data_5m, trade_date):
             round(float(latest_bar["close"]), 4),
         ))
         state["last_status_time"] = latest_time
+    state["latest_bar_time"] = latest_time
+    state["latest_price"] = round(float(latest_bar["close"]), 4)
+    state["latest_status"] = status
+    state["latest_local_time"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     return state
 
 

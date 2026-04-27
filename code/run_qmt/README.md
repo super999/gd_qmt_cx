@@ -22,6 +22,7 @@
   - 图形化启动器
   - 用按钮调用 `intraday_low_absorb_monitor.py`
   - 不复制策略逻辑，不单独维护规则
+  - 支持参数自动回填、replay 摘要、事件筛选、双击事件查看 1m/5m K 线、live 状态栏
 - `start_intraday_monitor_gui.bat`
   - 双击或命令行运行即可打开图形化启动器
 
