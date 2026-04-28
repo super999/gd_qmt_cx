@@ -26,6 +26,20 @@
 - `start_intraday_monitor_gui.bat`
   - 双击或命令行运行即可打开图形化启动器
 
+## QMT 内运行脚本
+
+QMT 内运行版放在 `python/` 目录：
+
+- `python/510300_盘中低位承接_QMT回测策略.py`
+  - QMT 历史回测版
+  - 建议在 QMT 策略研究中选择 `5分钟` 周期运行
+  - 输出目录：`python/outputs/qmt_intraday_low_absorb_backtest/`
+- `python/510300_盘中低位承接_QMT实时盯盘.py`
+  - QMT 实时盯盘版
+  - 订阅 `510300.SH` 的 `1m` K 线推送，内部聚合为 5m 观察
+  - 不自动下单，只输出提示和日志
+  - 输出目录：`python/outputs/qmt_intraday_low_absorb_live/`
+
 详细使用说明见：
 
 - `报告/项目管理/盘中模拟监控程序使用手册.md`
