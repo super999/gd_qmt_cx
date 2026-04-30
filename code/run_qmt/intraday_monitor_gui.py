@@ -86,6 +86,8 @@ class MonitorGui:
         self.latest_bar_var = tk.StringVar(value="-")
         self.latest_price_var = tk.StringVar(value="-")
         self.live_signal_var = tk.StringVar(value="-")
+        self.scan_count_var = tk.StringVar(value="-")
+        self.last_scan_time_var = tk.StringVar(value="-")
         self.summary_signal_var = tk.StringVar(value="-")
         self.summary_event_var = tk.StringVar(value="-")
         self.summary_trade_var = tk.StringVar(value="-")
@@ -151,6 +153,8 @@ class MonitorGui:
         self._summary_item(live_status, "最新5m时间", self.latest_bar_var, 0)
         self._summary_item(live_status, "最新价", self.latest_price_var, 1)
         self._summary_item(live_status, "触发状态", self.live_signal_var, 2)
+        self._summary_item(live_status, "扫描次数", self.scan_count_var, 3)
+        self._summary_item(live_status, "上次扫描完成", self.last_scan_time_var, 4)
 
         actions = ttk.LabelFrame(outer, text="常用操作")
         actions.pack(fill=tk.X, pady=(10, 0))
@@ -340,17 +344,23 @@ class MonitorGui:
         self.output.see(tk.END)
 
     def _parse_live_line(self, line):
-        if "live heartbeat" not in line:
+        if "live heartbeat" not in line and "live scan" not in line:
             return
         bar_match = re.search(r"latest_bar=(\d+)", line)
         status_match = re.search(r"status=([^ ]+)", line)
         close_match = re.search(r"close=([0-9.]+)", line)
+        scan_count_match = re.search(r"scan_count=(\d+)", line)
+        scan_time_match = re.search(r"last_scan_time=([0-9:-]+ [0-9:]+)", line)
         if bar_match:
             self.latest_bar_var.set(self._format_event_time(bar_match.group(1)))
         if status_match:
             self.live_signal_var.set(status_match.group(1))
         if close_match:
             self.latest_price_var.set(close_match.group(1))
+        if scan_count_match:
+            self.scan_count_var.set(scan_count_match.group(1))
+        if scan_time_match:
+            self.last_scan_time_var.set(scan_time_match.group(1))
 
     def clear_output(self):
         self.output.delete("1.0", tk.END)
@@ -854,12 +864,18 @@ class MonitorGui:
         latest_bar = state.get("latest_bar_time")
         latest_price = state.get("latest_price")
         latest_status = state.get("latest_status")
+        scan_count = state.get("scan_count")
+        last_scan_time = state.get("last_scan_time")
         if latest_bar:
             self.latest_bar_var.set(self._format_event_time(str(latest_bar)))
         if latest_price is not None:
             self.latest_price_var.set(str(latest_price))
         if latest_status:
             self.live_signal_var.set(str(latest_status))
+        if scan_count is not None:
+            self.scan_count_var.set(str(scan_count))
+        if last_scan_time:
+            self.last_scan_time_var.set(str(last_scan_time))
 
     def _read_summary_json_value(self, key):
         path = OUTPUT_DIR / "summary.json"

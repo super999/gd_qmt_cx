@@ -921,13 +921,33 @@ def run_live(args):
             trade_date = str(data_5m.iloc[-1]["trade_date"])
             daily = load_live_daily_context(args.stock, trade_date)
             state = maybe_emit_live_events(args, state, daily, data_5m, trade_date)
+            state["scan_count"] = int(state.get("scan_count") or 0) + 1
+            state["last_scan_time"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            state["last_scan_status"] = "成功"
+            print("[{}] live scan scan_count={} last_scan_time={} latest_bar={} status={} close={}".format(
+                datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                state["scan_count"],
+                state["last_scan_time"],
+                state.get("latest_bar_time", ""),
+                state.get("latest_status", ""),
+                state.get("latest_price", ""),
+            ))
             save_state(state_path, state)
         except KeyboardInterrupt:
             save_state(state_path, state)
             print("live 模式已退出，状态已保存：{}".format(state_path))
             return
         except Exception as exc:
+            state["scan_count"] = int(state.get("scan_count") or 0) + 1
+            state["last_scan_time"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            state["last_scan_status"] = "异常: {}".format(exc)
             print("[{}] live error: {}".format(datetime.now().strftime("%Y-%m-%d %H:%M:%S"), exc))
+            print("[{}] live scan scan_count={} last_scan_time={} status={}".format(
+                datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                state["scan_count"],
+                state["last_scan_time"],
+                state["last_scan_status"],
+            ))
             save_state(state_path, state)
 
         if args.max_loops and loop >= args.max_loops:
