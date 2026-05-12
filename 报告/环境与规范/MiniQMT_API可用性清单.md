@@ -14,6 +14,13 @@
 - 补充冒烟验证环境：`d:\python_envs\gd_qmt_env\python.exe`，测试日期 `2026-04-22`
 - 当前开发环境结论：`d:\python_envs\gd_qmt_env`（Python `3.12`）已确认可用，并应作为优先开发环境；`d:\python_envs\gd_qmt_py36` 作为兼容性备用环境保留
 
+## QMT / MiniQMT 脚本边界
+
+- `code/run_qmt/`：QMT 内策略脚本，需要放入 QMT 策略环境并在 QMT 中启动。
+- `code/miniqmt_tools/`：外部 Python 连接 MiniQMT 的工具脚本，不需要复制到 QMT 中，也不需要在 QMT 策略界面手动点启动。
+- `code/run_xtquant/`：保留为 `xtquant` / `xtdata` 接口验证脚本目录，不再新增业务型 MiniQMT 工具。
+- 详细边界见：`报告/环境与规范/QMT与MiniQMT程序边界.md`
+
 ## 面向后续 Agent 的阅读方式
 
 如果后续要写回测代码或策略代码，建议按下面顺序读取本文件：
