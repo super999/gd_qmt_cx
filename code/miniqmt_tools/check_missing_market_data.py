@@ -62,10 +62,42 @@ FILL_DATA = False
 
 BATCH_SIZE = 300
 DOWNLOAD_PROGRESS_EVERY = 100
+INSTRUMENT_DETAIL_PROGRESS_EVERY = 500
 
 REQUIRED_FIELDS = ["open", "high", "low", "close", "volume", "amount"]
 SUSPEND_FIELD = "suspendFlag"
 OUTPUT_DIR = Path(__file__).resolve().parent / "outputs"
+
+# 查询合约基础信息，用 OpenDate/ExpireDate 辅助解释目标日没有行情的原因。
+CHECK_INSTRUMENT_DETAIL = True
+
+OPEN_DATE_SPECIAL_VALUES = {
+    "19700101": "新股",
+    "19700102": "老股东增发",
+    "19700103": "新债",
+    "19700104": "可转债",
+    "19700105": "配股",
+    "19700106": "配号",
+}
+EXPIRE_DATE_NO_EXPIRE_VALUES = {"0", "99999999"}
+PRODUCT_TYPE_LABELS = {
+    -1: "默认/普通品种",
+    0: "沪深股票期权认购",
+    1: "期货/股指期货",
+    2: "期权/能源期货",
+    3: "组合套利/农业期货",
+    4: "即期/金属期货",
+    5: "期转现/利率期货",
+    6: "期权(IF)/汇率期货",
+    7: "数字货币期货",
+    99: "自定义合约期货",
+    107: "数字货币现货",
+    201: "股票",
+    202: "GDR",
+    203: "ETF",
+    204: "ETN",
+    300: "其他",
+}
 
 # 默认只检查本地数据。改成 True 时，只下载初始检查发现缺失的股票。
 DOWNLOAD_MISSING_AFTER_LOCAL_CHECK = False
@@ -114,6 +146,112 @@ def normalize_date(value: Any) -> Optional[str]:
     if len(digits) >= 8:
         return digits[:8]
     return None
+
+
+def raw_text(value: Any) -> str:
+    if value is None:
+        return ""
+    text = str(value).strip()
+    if text.lower() in {"none", "nan", "nat"}:
+        return ""
+    return text
+
+
+def raw_date_code(value: Any) -> str:
+    text = raw_text(value)
+    if not text:
+        return ""
+    digits = "".join(ch for ch in text if ch.isdigit())
+    if len(digits) >= 8:
+        return digits[:8]
+    return digits
+
+
+def format_yyyymmdd(value: Any) -> str:
+    date = normalize_date(value)
+    if not date:
+        return ""
+    return "{}-{}-{}".format(date[:4], date[4:6], date[6:8])
+
+
+def int_date_or_none(value: Any, special_values: Optional[set] = None) -> Optional[int]:
+    raw_date = raw_date_code(value)
+    if not raw_date or (special_values and raw_date in special_values):
+        return None
+
+    date = normalize_date(value)
+    if not date:
+        return None
+    try:
+        datetime.strptime(date, "%Y%m%d")
+    except Exception:
+        return None
+    try:
+        date_int = int(date)
+    except Exception:
+        return None
+    if date_int < 19000101:
+        return None
+    return date_int
+
+
+def describe_open_date(value: Any) -> str:
+    raw_date = raw_date_code(value)
+    if not raw_date:
+        return "未提供"
+    if raw_date in OPEN_DATE_SPECIAL_VALUES:
+        return "{}({})".format(raw_date, OPEN_DATE_SPECIAL_VALUES[raw_date])
+
+    date_text = format_yyyymmdd(value)
+    if date_text and int_date_or_none(value, OPEN_DATE_SPECIAL_VALUES):
+        return date_text
+    return "{}(非标准日期/特殊值)".format(raw_date)
+
+
+def describe_expire_date(value: Any) -> str:
+    raw = raw_text(value)
+    raw_date = raw_date_code(value)
+    if not raw:
+        return "未提供"
+    if raw in EXPIRE_DATE_NO_EXPIRE_VALUES or raw_date in EXPIRE_DATE_NO_EXPIRE_VALUES:
+        return "暂无退市日/到期日"
+
+    date_text = format_yyyymmdd(value)
+    if date_text and int_date_or_none(value, EXPIRE_DATE_NO_EXPIRE_VALUES):
+        return date_text
+    return "{}(非标准日期/特殊值)".format(raw_date or raw)
+
+
+def describe_instrument_status(value: Any) -> str:
+    if raw_text(value) == "":
+        return "未提供"
+    try:
+        status = int(float(value))
+    except Exception:
+        return "{}(未知状态值)".format(value)
+    if status == -1:
+        return "复牌"
+    if status <= 0:
+        return "正常交易"
+    return "停牌状态/停牌{}天".format(status)
+
+
+def describe_is_trading(value: Any) -> str:
+    if value is True:
+        return "可交易"
+    if value is False:
+        return "不可交易"
+    return "未提供"
+
+
+def describe_product_type(value: Any) -> str:
+    if raw_text(value) == "":
+        return "未提供"
+    try:
+        product_type = int(float(value))
+    except Exception:
+        return "{}(未知品种类型)".format(value)
+    return PRODUCT_TYPE_LABELS.get(product_type, "{}(未收录枚举)".format(product_type))
 
 
 def is_missing_value(value: Any) -> bool:
@@ -200,6 +338,39 @@ def get_stock_pool(statuses: List[CheckStatus]) -> Tuple[List[str], Dict[str, st
             code_source.setdefault(code, sector)
 
     return sorted(set(codes)), code_source
+
+
+def fetch_instrument_details(codes: List[str], statuses: List[CheckStatus]) -> Dict[str, Dict[str, Any]]:
+    if not CHECK_INSTRUMENT_DETAIL:
+        add_status(statuses, "get_instrument_detail", "SKIP", "CHECK_INSTRUMENT_DETAIL=False")
+        return {}
+
+    details: Dict[str, Dict[str, Any]] = {}
+    failed: List[str] = []
+    for index, code in enumerate(codes, start=1):
+        try:
+            detail = xtdata.get_instrument_detail(code)
+            if isinstance(detail, dict):
+                details[code] = detail
+            else:
+                failed.append(code)
+        except Exception:
+            failed.append(code)
+
+        if INSTRUMENT_DETAIL_PROGRESS_EVERY > 0 and index % INSTRUMENT_DETAIL_PROGRESS_EVERY == 0:
+            print("读取合约基础信息: {}/{}".format(index, len(codes)))
+
+    if failed:
+        add_status(
+            statuses,
+            "get_instrument_detail",
+            "PARTIAL",
+            "成功 {}, 失败 {}, 失败样例: {}".format(len(details), len(failed), ", ".join(failed[:10])),
+        )
+    else:
+        add_status(statuses, "get_instrument_detail", "OK", "成功读取 {} 个标的".format(len(details)))
+
+    return details
 
 
 def fetch_local_batch(codes: List[str], statuses: List[CheckStatus], label: str) -> Dict[str, pd.DataFrame]:
@@ -298,6 +469,89 @@ def collect_missing_records(
     return records
 
 
+def collect_instrument_status_records(
+    codes: List[str],
+    code_source: Dict[str, str],
+    details_by_code: Dict[str, Dict[str, Any]],
+    expected_dates: List[str],
+) -> List[Dict[str, Any]]:
+    records: List[Dict[str, Any]] = []
+    if not details_by_code:
+        return records
+
+    target_date_int = int(expected_dates[0])
+    for code in codes:
+        detail = details_by_code.get(code)
+        if not isinstance(detail, dict):
+            continue
+
+        open_date_raw = raw_text(detail.get("OpenDate"))
+        expire_date_raw = raw_text(detail.get("ExpireDate"))
+        product_type = detail.get("ProductType")
+        open_date = int_date_or_none(detail.get("OpenDate"), set(OPEN_DATE_SPECIAL_VALUES))
+        expire_date = int_date_or_none(detail.get("ExpireDate"), EXPIRE_DATE_NO_EXPIRE_VALUES)
+        instrument_status = detail.get("InstrumentStatus")
+        is_trading = detail.get("IsTrading")
+        name = detail.get("InstrumentName") or ""
+
+        status_type = ""
+        status_label = ""
+        status_detail = ""
+        if open_date and open_date > target_date_int:
+            status_type = "not_listed_on_target_date"
+            status_label = "目标日尚未上市"
+            status_detail = "上市日期 {} 晚于目标日期 {}".format(
+                describe_open_date(detail.get("OpenDate")),
+                format_yyyymmdd(expected_dates[0]) or expected_dates[0],
+            )
+        elif expire_date and expire_date not in (0, 99999999) and expire_date <= target_date_int:
+            status_type = "delisted_or_expired_on_target_date"
+            status_label = "目标日已退市/到期"
+            status_detail = "退市/到期日 {} 早于或等于目标日期 {}".format(
+                describe_expire_date(detail.get("ExpireDate")),
+                format_yyyymmdd(expected_dates[0]) or expected_dates[0],
+            )
+        else:
+            try:
+                instrument_status_number = int(float(instrument_status))
+            except Exception:
+                instrument_status_number = 0
+            if instrument_status_number >= 1:
+                status_type = "current_instrument_suspended"
+                status_label = "当前合约停牌状态"
+                status_detail = "InstrumentStatus={}: {}".format(
+                    raw_text(instrument_status),
+                    describe_instrument_status(instrument_status),
+                )
+
+        if not status_type:
+            continue
+
+        records.append(
+            {
+                "code": code,
+                "name": name,
+                "sector": code_source.get(code, ""),
+                "target_date": expected_dates[0],
+                "status_type": status_type,
+                "status_label": status_label,
+                "OpenDate": open_date_raw,
+                "OpenDateText": describe_open_date(detail.get("OpenDate")),
+                "ExpireDate": expire_date_raw,
+                "ExpireDateText": describe_expire_date(detail.get("ExpireDate")),
+                "ProductType": raw_text(product_type),
+                "ProductTypeText": describe_product_type(product_type),
+                "InstrumentStatus": instrument_status if instrument_status is not None else "",
+                "InstrumentStatusText": describe_instrument_status(instrument_status),
+                "IsTrading": is_trading if is_trading is not None else "",
+                "IsTradingText": describe_is_trading(is_trading),
+                "detail": status_detail,
+            }
+        )
+
+    return records
+
+
 def collect_suspended_records(
     codes: List[str],
     code_source: Dict[str, str],
@@ -348,10 +602,25 @@ def summarize(
     codes: List[str],
     missing_records: List[Dict[str, Any]],
     suspended_records: List[Dict[str, Any]],
+    instrument_status_records: List[Dict[str, Any]],
     expected_dates: List[str],
 ) -> Dict[str, Any]:
     missing_codes = {record["code"] for record in missing_records}
     suspended_codes = {record["code"] for record in suspended_records}
+    not_listed_codes = {
+        record["code"] for record in instrument_status_records if record["status_type"] == "not_listed_on_target_date"
+    }
+    delisted_codes = {
+        record["code"] for record in instrument_status_records if record["status_type"] == "delisted_or_expired_on_target_date"
+    }
+    instrument_suspended_codes = {
+        record["code"] for record in instrument_status_records if record["status_type"] == "current_instrument_suspended"
+    }
+    instrument_status_codes = {record["code"] for record in instrument_status_records}
+    missing_with_not_listed_codes = missing_codes & not_listed_codes
+    missing_with_delisted_codes = missing_codes & delisted_codes
+    missing_with_instrument_suspended_codes = missing_codes & instrument_suspended_codes
+    missing_without_instrument_status_codes = missing_codes - instrument_status_codes
     available_code_count = len(codes) - len(missing_codes)
     normal_code_count = max(available_code_count - len(suspended_codes), 0)
     coverage_rate = available_code_count / len(codes) if codes else 0.0
@@ -363,6 +632,15 @@ def summarize(
         "missing_code_count": len(missing_codes),
         "suspended_record_count": len(suspended_records),
         "suspended_code_count": len(suspended_codes),
+        "instrument_status_record_count": len(instrument_status_records),
+        "not_listed_code_count": len(not_listed_codes),
+        "delisted_code_count": len(delisted_codes),
+        "instrument_suspended_code_count": len(instrument_suspended_codes),
+        "missing_with_instrument_status_count": len(missing_codes & instrument_status_codes),
+        "missing_with_not_listed_count": len(missing_with_not_listed_codes),
+        "missing_with_delisted_count": len(missing_with_delisted_codes),
+        "missing_with_instrument_suspended_count": len(missing_with_instrument_suspended_codes),
+        "missing_without_instrument_status_count": len(missing_without_instrument_status_codes),
         "normal_code_count": normal_code_count,
         "available_code_count": available_code_count,
         "coverage_rate": coverage_rate,
@@ -452,11 +730,42 @@ def write_suspended_csv(records: List[Dict[str, Any]], prefix: str) -> Path:
     return csv_path
 
 
+def write_instrument_status_csv(records: List[Dict[str, Any]], prefix: str) -> Path:
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    csv_path = OUTPUT_DIR / "{}_{}.csv".format(prefix, timestamp)
+    df = pd.DataFrame(
+        records,
+        columns=[
+            "code",
+            "name",
+            "sector",
+            "target_date",
+            "status_type",
+            "status_label",
+            "OpenDate",
+            "OpenDateText",
+            "ExpireDate",
+            "ExpireDateText",
+            "ProductType",
+            "ProductTypeText",
+            "InstrumentStatus",
+            "InstrumentStatusText",
+            "IsTrading",
+            "IsTradingText",
+            "detail",
+        ],
+    )
+    df.to_csv(csv_path, index=False, encoding="utf-8-sig")
+    return csv_path
+
+
 def write_summary_report(
     statuses: List[CheckStatus],
     initial_summary: Dict[str, Any],
     initial_missing_csv: Path,
     initial_suspended_csv: Path,
+    instrument_status_csv: Path,
     after_download_summary: Optional[Dict[str, Any]] = None,
     after_download_missing_csv: Optional[Path] = None,
     after_download_suspended_csv: Optional[Path] = None,
@@ -474,6 +783,7 @@ def write_summary_report(
         "- 周期：{}".format(PERIOD),
         "- 复权：{}".format(DIVIDEND_TYPE),
         "- fill_data：{}（缺失检查固定为 False，避免填充数据掩盖缺口）".format(FILL_DATA),
+        "- 合约基础信息检查：{}".format(CHECK_INSTRUMENT_DETAIL),
         "- 缺失后下载：{}".format(DOWNLOAD_MISSING_AFTER_LOCAL_CHECK),
         "",
         "## 初始本地检查",
@@ -487,8 +797,17 @@ def write_summary_report(
         "- 正常行情占比：{:.2%}".format(initial_summary["normal_rate"]),
         "- 缺失记录数：{}".format(initial_summary["missing_record_count"]),
         "- 停牌标记记录数：{}".format(initial_summary["suspended_record_count"]),
+        "- 目标日尚未上市股票数：{}".format(initial_summary["not_listed_code_count"]),
+        "- 目标日已退市/到期股票数：{}".format(initial_summary["delisted_code_count"]),
+        "- 当前合约停牌状态股票数：{}".format(initial_summary["instrument_suspended_code_count"]),
+        "- 缺失股票中有合约状态标记数：{}".format(initial_summary["missing_with_instrument_status_count"]),
+        "- 缺失股票中当前合约停牌状态数：{}".format(initial_summary["missing_with_instrument_suspended_count"]),
+        "- 缺失股票中目标日尚未上市数：{}".format(initial_summary["missing_with_not_listed_count"]),
+        "- 缺失股票中目标日已退市/到期数：{}".format(initial_summary["missing_with_delisted_count"]),
+        "- 缺失股票中暂未被合约状态解释数：{}".format(initial_summary["missing_without_instrument_status_count"]),
         "- 初始缺失CSV：{}".format(initial_missing_csv),
         "- 初始停牌标记CSV：{}".format(initial_suspended_csv),
+        "- 合约状态CSV：{}".format(instrument_status_csv),
         "",
     ]
 
@@ -530,6 +849,14 @@ def print_summary(title: str, summary: Dict[str, Any]) -> None:
     print("正常行情占比: {:.2%}".format(summary["normal_rate"]))
     print("缺失记录数: {}".format(summary["missing_record_count"]))
     print("停牌标记记录数: {}".format(summary["suspended_record_count"]))
+    print("目标日尚未上市股票数: {}".format(summary["not_listed_code_count"]))
+    print("目标日已退市/到期股票数: {}".format(summary["delisted_code_count"]))
+    print("当前合约停牌状态股票数: {}".format(summary["instrument_suspended_code_count"]))
+    print("缺失股票中有合约状态标记数: {}".format(summary["missing_with_instrument_status_count"]))
+    print("缺失股票中当前合约停牌状态数: {}".format(summary["missing_with_instrument_suspended_count"]))
+    print("缺失股票中目标日尚未上市数: {}".format(summary["missing_with_not_listed_count"]))
+    print("缺失股票中目标日已退市/到期数: {}".format(summary["missing_with_delisted_count"]))
+    print("缺失股票中暂未被合约状态解释数: {}".format(summary["missing_without_instrument_status_count"]))
 
 
 def print_missing_samples(records: List[Dict[str, Any]]) -> None:
@@ -548,6 +875,7 @@ def print_missing_samples(records: List[Dict[str, Any]]) -> None:
 def print_suspended_samples(records: List[Dict[str, Any]]) -> None:
     if not records:
         print("未发现 suspendFlag 非 0 的行情行。")
+        print("说明: suspendFlag 只能在已取到的行情行里读取；无行情行的缺失股票请看“缺失股票中当前合约停牌状态数”。")
         return
 
     print("停牌标记样例:")
@@ -555,6 +883,22 @@ def print_suspended_samples(records: List[Dict[str, Any]]) -> None:
         print(
             "- {code} {date} suspendFlag={suspendFlag} "
             "open={open} high={high} low={low} close={close}".format(**record)
+        )
+    if len(records) > 20:
+        print("- ... 其余见 CSV 明细")
+
+
+def print_instrument_status_samples(records: List[Dict[str, Any]]) -> None:
+    if not records:
+        print("未发现未上市、已退市/到期或当前合约停牌状态记录。")
+        return
+
+    print("合约状态样例:")
+    for record in records[:20]:
+        print(
+            "- {code} {name} | {status_label} | {detail} | "
+            "上市={OpenDateText} | 退市/到期={ExpireDateText} | "
+            "品种={ProductTypeText} | IsTrading={IsTradingText}".format(**record)
         )
     if len(records) > 20:
         print("- ... 其余见 CSV 明细")
@@ -593,6 +937,7 @@ def main() -> int:
     print("读取接口: get_local_data")
     print("周期: {}".format(PERIOD))
     print("fill_data: {}（缺失检查固定用 False）".format(FILL_DATA))
+    print("合约基础信息检查: {}".format(CHECK_INSTRUMENT_DETAIL))
     print("缺失后下载: {}".format(DOWNLOAD_MISSING_AFTER_LOCAL_CHECK))
 
     try:
@@ -601,6 +946,10 @@ def main() -> int:
         print("股票池数量: {}".format(len(codes)))
         if not codes:
             raise RuntimeError("股票池为空，请检查 TARGET_SECTORS/CODE_PREFIXES/MARKET_SUFFIXES。")
+
+        details_by_code = fetch_instrument_details(codes, statuses)
+        instrument_status_records = collect_instrument_status_records(codes, code_source, details_by_code, expected_dates)
+        instrument_status_csv = write_instrument_status_csv(instrument_status_records, "instrument_status_initial")
 
         all_data = fetch_local_data(codes, statuses, "初始")
         initial_records = collect_missing_records(codes, code_source, all_data, expected_dates)
@@ -611,15 +960,23 @@ def main() -> int:
             expected_dates,
             initial_records,
         )
-        initial_summary = summarize(codes, initial_records, initial_suspended_records, expected_dates)
+        initial_summary = summarize(
+            codes,
+            initial_records,
+            initial_suspended_records,
+            instrument_status_records,
+            expected_dates,
+        )
         initial_csv = write_records_csv(initial_records, "missing_market_data_initial")
         initial_suspended_csv = write_suspended_csv(initial_suspended_records, "suspended_market_data_initial")
 
         print_summary("初始本地检查结果", initial_summary)
         print_missing_samples(initial_records)
         print_suspended_samples(initial_suspended_records)
+        print_instrument_status_samples(instrument_status_records)
         print("初始缺失CSV: {}".format(initial_csv))
         print("初始停牌标记CSV: {}".format(initial_suspended_csv))
+        print("合约状态CSV: {}".format(instrument_status_csv))
 
         after_download_summary = None
         after_download_csv = None
@@ -636,7 +993,16 @@ def main() -> int:
                 expected_dates,
                 after_records,
             )
-            after_download_summary = summarize(missing_codes, after_records, after_suspended_records, expected_dates)
+            after_status_records = [
+                record for record in instrument_status_records if record["code"] in set(missing_codes)
+            ]
+            after_download_summary = summarize(
+                missing_codes,
+                after_records,
+                after_suspended_records,
+                after_status_records,
+                expected_dates,
+            )
             after_download_csv = write_records_csv(after_records, "missing_market_data_after_download")
             after_download_suspended_csv = write_suspended_csv(
                 after_suspended_records,
@@ -654,6 +1020,7 @@ def main() -> int:
             initial_summary=initial_summary,
             initial_missing_csv=initial_csv,
             initial_suspended_csv=initial_suspended_csv,
+            instrument_status_csv=instrument_status_csv,
             after_download_summary=after_download_summary,
             after_download_missing_csv=after_download_csv,
             after_download_suspended_csv=after_download_suspended_csv,

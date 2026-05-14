@@ -19,7 +19,9 @@
   - 如需只下载缺失股票并复查，把脚本顶部的 `DOWNLOAD_MISSING_AFTER_LOCAL_CHECK` 改为 `True`。
   - `fill_data=False` 是缺失检查的固定口径；`fill_data=True` 会用前一条数据填充缺失 K 线，可能掩盖真实缺口。
   - 有行情行时会额外读取 `suspendFlag`；`suspendFlag` 非 0 的股票单独输出为“停牌标记”，不混入缺失清单。
-  - 输出初始缺失清单和停牌标记清单；如果触发下载，再输出下载后仍缺失清单和下载后停牌标记清单。
+  - 会调用 `get_instrument_detail` 读取 `OpenDate`、`ExpireDate`、`InstrumentStatus`、`IsTrading`，用于识别目标日尚未上市、目标日已退市/到期、当前合约停牌状态。
+  - 合约状态输出会按官方特殊值做中文解释：`OpenDate=19700101..19700106`、`ExpireDate=0/99999999`、`InstrumentStatus<=0/>=1`、`ProductType`。
+  - 输出初始缺失清单、停牌标记清单和合约状态清单；如果触发下载，再输出下载后仍缺失清单和下载后停牌标记清单。
 - `example_download_then_get_market_data_ex.py`
   - 单只股票示例：先直接 `get_market_data_ex`，再 `download_history_data`，再 `get_market_data_ex`。
   - 用下载前后对比说明“取不到历史行情是否因为未下载”。
