@@ -25,6 +25,7 @@
 - `verify_suspend_flag_field.py`
   - 单独验证 `get_market_data_ex/get_local_data` 是否能返回 `suspendFlag` 字段。
   - 同时打印样本股票的 `get_instrument_detail` 状态，用来区分“字段不可用”和“目标日没有行情行”。
+  - 验证结论已沉淀到 `报告/环境与规范/MiniQMT_suspendFlag字段验证记录.md`。
 - `example_download_then_get_market_data_ex.py`
   - 单只股票示例：先直接 `get_market_data_ex`，再 `download_history_data`，再 `get_market_data_ex`。
   - 用下载前后对比说明“取不到历史行情是否因为未下载”。

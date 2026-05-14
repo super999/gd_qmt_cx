@@ -78,6 +78,10 @@
 | `xtdata.get_local_data` | `可用` | 返回 `dict`，键是证券代码，值是 `pandas.DataFrame` |
 | `xtdata.subscribe_quote` | `可用` | 返回订阅号，本次实测为字符串形式的 `"1"` |
 | `xtdata.run` | `可用` | 本身是阻塞事件循环入口；配合回调后，回调参数是 `dict`，键为证券代码 |
+
+补充记录：
+
+- `suspendFlag` 字段已于 2026-05-14 单独验证。`get_market_data_ex/get_local_data` 均可返回该字段；`fill_data=False` 时停牌样本可能没有目标日行情行，`fill_data=True` 时可见填充行 `suspendFlag=1`。详细结论见：`报告/环境与规范/MiniQMT_suspendFlag字段验证记录.md`
 | `ContextInfo.subscribe_quote`（QMT 内） | `可用` | 返回订阅号（int）；result_type='dict' 时回调参数为 `{stock_code: {field: value}}`，含 stime/lastPrice/open/high/low/lastClose/volume/pvolume/transactionNum/askPrice[5]/bidPrice[5]/askVol[5]/bidVol[5] |
 | `ContextInfo.subscribe_whole_quote`（QMT 内） | `可用` | 返回订阅号（int）；回调参数为 `{stock1: data1, ...}`，每条 data 含 time(ms)/lastPrice/open/high/low/lastClose/volume/pvolume/transactionNum/amount/askPrice[5]/bidPrice[5]/askVol[5]/bidVol[5]/volRatio/speed1Min/speed5Min |
 | `xtdata.get_sector_list` | `可用` | 返回 `list[str]`，本次实测共 854 个板块名 |
