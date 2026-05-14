@@ -14,10 +14,12 @@
   - 按指定日期、代码前缀、市场后缀和价格区间筛选股票。
   - 默认会先对目标股票池补下载目标日期历史行情，再读取和筛选。
 - `check_missing_market_data.py`
-  - 检查目标股票池在指定日期范围内的本地行情缺失情况。
-  - 默认 `DOWNLOAD_BEFORE_CHECK=False`，只检查当前本地行情库缺什么，不会自动调用 `download_history_data`。
-  - 如需按官方推荐流程“先下载、再检查”，把脚本顶部的 `DOWNLOAD_BEFORE_CHECK` 改为 `True`。
-  - 输出缺失清单，便于手动补全后再次检查。
+  - 全市场单日 Local-First 行情缺失检查，默认扫描 `上证A股` + `深证A股`。
+  - 默认先用 `get_local_data` 检查本地行情，不自动下载。
+  - 如需只下载缺失股票并复查，把脚本顶部的 `DOWNLOAD_MISSING_AFTER_LOCAL_CHECK` 改为 `True`。
+  - `fill_data=False` 是缺失检查的固定口径；`fill_data=True` 会用前一条数据填充缺失 K 线，可能掩盖真实缺口。
+  - 有行情行时会额外读取 `suspendFlag`；`suspendFlag` 非 0 的股票单独输出为“停牌标记”，不混入缺失清单。
+  - 输出初始缺失清单和停牌标记清单；如果触发下载，再输出下载后仍缺失清单和下载后停牌标记清单。
 - `example_download_then_get_market_data_ex.py`
   - 单只股票示例：先直接 `get_market_data_ex`，再 `download_history_data`，再 `get_market_data_ex`。
   - 用下载前后对比说明“取不到历史行情是否因为未下载”。
