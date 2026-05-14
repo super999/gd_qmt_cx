@@ -15,13 +15,23 @@
   - 默认会先对目标股票池补下载目标日期历史行情，再读取和筛选。
 - `check_missing_market_data.py`
   - 检查目标股票池在指定日期范围内的本地行情缺失情况。
-  - 默认只检查、不下载，输出缺失清单，便于手动补全后再次检查。
+  - 默认 `DOWNLOAD_BEFORE_CHECK=False`，只检查当前本地行情库缺什么，不会自动调用 `download_history_data`。
+  - 如需按官方推荐流程“先下载、再检查”，把脚本顶部的 `DOWNLOAD_BEFORE_CHECK` 改为 `True`。
+  - 输出缺失清单，便于手动补全后再次检查。
+- `example_download_then_get_market_data_ex.py`
+  - 单只股票示例：先直接 `get_market_data_ex`，再 `download_history_data`，再 `get_market_data_ex`。
+  - 用下载前后对比说明“取不到历史行情是否因为未下载”。
+- `example_get_local_data.py`
+  - 单只股票示例：先 `download_history_data`，再用 `get_local_data` 从本地行情库读取。
+  - 同时用 `get_market_data_ex` 做对照，便于理解两个接口的返回结构。
 
 ## 推荐运行环境
 
 ```powershell
 d:\python_envs\gd_qmt_env\python.exe code/miniqmt_tools/find_stocks_by_price_range.py
 d:\python_envs\gd_qmt_env\python.exe code/miniqmt_tools/check_missing_market_data.py
+d:\python_envs\gd_qmt_env\python.exe code/miniqmt_tools/example_download_then_get_market_data_ex.py
+d:\python_envs\gd_qmt_env\python.exe code/miniqmt_tools/example_get_local_data.py
 ```
 
 运行前请确认 MiniQMT 已启动，且行情连接正常。

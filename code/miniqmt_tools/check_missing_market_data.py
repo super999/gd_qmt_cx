@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 # coding: utf-8
 r"""
-检查 MiniQMT 本地行情是否缺失。
+检查 MiniQMT 行情是否缺失。
 
-默认只检查、不下载：
+默认模式是 local_only：只检查当前本地行情库，不自动下载。
     d:\python_envs\gd_qmt_env\python.exe code/miniqmt_tools/check_missing_market_data.py
+
+如果要按官方推荐流程“先下载、再检查”，把 DOWNLOAD_BEFORE_CHECK 改为 True。
 
 输出：
 - 控制台摘要
@@ -54,8 +56,12 @@ BATCH_SIZE = 300
 REQUIRED_FIELDS = ["open", "high", "low", "close", "volume", "amount"]
 OUTPUT_DIR = Path(__file__).resolve().parent / "outputs"
 
-# 默认只检查，不自动补下载。需要自动补下载时手动改成 True。
-AUTO_DOWNLOAD_MISSING = False
+# 官方推荐历史行情读取流程是先 download_history_data，再 get_local_data/get_market_data_ex。
+# 但缺失检查有两个不同用途：
+# - False：local_only，只检查当前本地行情库缺什么，不改变数据状态。
+# - True：download_then_check，先补充目标股票池/日期范围，再检查下载后仍缺什么。
+DOWNLOAD_BEFORE_CHECK = False
+DOWNLOAD_PROGRESS_EVERY = 100
 
 
 @dataclass
@@ -176,6 +182,40 @@ def fetch_batch(codes: List[str], statuses: List[CheckStatus]) -> Dict[str, pd.D
         raise
 
 
+def download_history_before_check(codes: List[str], statuses: List[CheckStatus]) -> None:
+    if not DOWNLOAD_BEFORE_CHECK:
+        add_status(statuses, "download_history_data", "SKIP", "DOWNLOAD_BEFORE_CHECK=False，按 local_only 模式只检查本地现状")
+        return
+
+    ok_count = 0
+    failed: List[str] = []
+    for index, code in enumerate(codes, start=1):
+        try:
+            xtdata.download_history_data(
+                code,
+                period=PERIOD,
+                start_time=CHECK_START_DATE,
+                end_time=CHECK_END_DATE,
+                incrementally=True,
+            )
+            ok_count += 1
+        except Exception:
+            failed.append(code)
+
+        if DOWNLOAD_PROGRESS_EVERY > 0 and index % DOWNLOAD_PROGRESS_EVERY == 0:
+            print("已处理历史行情下载: {}/{}".format(index, len(codes)))
+
+    if failed:
+        add_status(
+            statuses,
+            "download_history_data",
+            "PARTIAL",
+            "下载前置步骤成功 {}, 失败 {}, 失败样例: {}".format(ok_count, len(failed), ", ".join(failed[:10])),
+        )
+    else:
+        add_status(statuses, "download_history_data", "OK", "下载前置步骤成功处理 {} 个标的".format(ok_count))
+
+
 def infer_expected_dates(data_by_code: Dict[str, pd.DataFrame]) -> List[str]:
     if EXPECTED_DATES:
         return sorted(set(EXPECTED_DATES))
@@ -258,32 +298,6 @@ def collect_missing_records(
     return records
 
 
-def download_missing_codes(records: List[Dict[str, Any]], statuses: List[CheckStatus]) -> None:
-    if not AUTO_DOWNLOAD_MISSING:
-        add_status(statuses, "download_history_data", "SKIP", "AUTO_DOWNLOAD_MISSING=False，仅检查不下载")
-        return
-
-    pairs = sorted({(record["code"], record["date"]) for record in records})
-    ok_count = 0
-    failed: List[str] = []
-    for code, date in pairs:
-        try:
-            xtdata.download_history_data(code, period=PERIOD, start_time=date, end_time=date, incrementally=True)
-            ok_count += 1
-        except Exception:
-            failed.append("{}@{}".format(code, date))
-
-    if failed:
-        add_status(
-            statuses,
-            "download_history_data",
-            "PARTIAL",
-            "成功 {}, 失败 {}, 失败样例: {}".format(ok_count, len(failed), ", ".join(failed[:10])),
-        )
-    else:
-        add_status(statuses, "download_history_data", "OK", "成功下载 {} 个 code/date".format(ok_count))
-
-
 def write_outputs(records: List[Dict[str, Any]], statuses: List[CheckStatus], summary: Dict[str, Any]) -> Tuple[Path, Path]:
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -304,10 +318,13 @@ def write_outputs(records: List[Dict[str, Any]], statuses: List[CheckStatus], su
         "- 周期：{}".format(PERIOD),
         "- 复权：{}".format(DIVIDEND_TYPE),
         "- fill_data：{}".format(FILL_DATA),
+        "- 下载前置检查：{}".format(DOWNLOAD_BEFORE_CHECK),
         "- 股票池数量：{}".format(summary["stock_count"]),
+        "- 已取到完整行情股票数：{}".format(summary["available_code_count"]),
+        "- 缺失股票数：{}".format(summary["missing_code_count"]),
+        "- 覆盖率：{:.2%}".format(summary["coverage_rate"]),
         "- 预期日期：{}".format(", ".join(summary["expected_dates"])),
         "- 缺失记录数：{}".format(summary["missing_record_count"]),
-        "- 缺失股票数：{}".format(summary["missing_code_count"]),
         "",
         "## 接口状态",
         "",
@@ -341,13 +358,15 @@ def main() -> int:
     print("Python: {}".format(sys.executable))
     print("日期范围: {} 至 {}".format(CHECK_START_DATE, CHECK_END_DATE))
     print("目标板块: {}".format(", ".join(TARGET_SECTORS)))
-    print("只检查不下载: {}".format(not AUTO_DOWNLOAD_MISSING))
+    print("模式: {}".format("download_then_check" if DOWNLOAD_BEFORE_CHECK else "local_only"))
 
     try:
         codes, code_source = get_stock_pool(statuses)
         print("股票池数量: {}".format(len(codes)))
         if not codes:
             raise RuntimeError("股票池为空，请检查 TARGET_SECTORS/CODE_PREFIXES/MARKET_SUFFIXES。")
+
+        download_history_before_check(codes, statuses)
 
         all_data: Dict[str, pd.DataFrame] = {}
         for batch_index, batch_codes in enumerate(chunked(codes, BATCH_SIZE), start=1):
@@ -367,21 +386,29 @@ def main() -> int:
             raise RuntimeError("无法推断预期交易日期。单日检查请确认 CHECK_START_DATE/CHECK_END_DATE。")
 
         records = collect_missing_records(codes, code_source, all_data, expected_dates)
-        download_missing_codes(records, statuses)
+        missing_codes = {record["code"] for record in records}
+        available_code_count = len(codes) - len(missing_codes)
+        coverage_rate = available_code_count / len(codes) if codes else 0.0
 
         summary = {
             "stock_count": len(codes),
             "expected_dates": expected_dates,
             "missing_record_count": len(records),
-            "missing_code_count": len({record["code"] for record in records}),
+            "missing_code_count": len(missing_codes),
+            "available_code_count": available_code_count,
+            "coverage_rate": coverage_rate,
         }
         csv_path, md_path = write_outputs(records, statuses, summary)
 
         print_title("检查结果")
         print("预期日期: {}".format(", ".join(expected_dates)))
-        print("缺失记录数: {}".format(summary["missing_record_count"]))
+        print("总股票数: {}".format(summary["stock_count"]))
+        print("已取到完整行情股票数: {}".format(summary["available_code_count"]))
         print("缺失股票数: {}".format(summary["missing_code_count"]))
+        print("覆盖率: {:.2%}".format(summary["coverage_rate"]))
+        print("缺失记录数: {}".format(summary["missing_record_count"]))
         if records:
+            print("说明: 下面只是缺失子集样例，不代表所有股票都缺失。")
             print("缺失样例:")
             for record in records[:20]:
                 print(
@@ -407,7 +434,7 @@ def main() -> int:
         print("排查提示:")
         print("- 请确认 MiniQMT 已启动，行情连接正常。")
         print("- 如果所有股票都缺失，请先在 MiniQMT 中补充对应日期历史行情。")
-        print("- 本脚本默认不下载，只报告缺失；补完数据后可再次运行检查。")
+        print("- local_only 模式不会调用 download_history_data；需要先下载再检查时，把 DOWNLOAD_BEFORE_CHECK 改为 True。")
         return 1
 
 
