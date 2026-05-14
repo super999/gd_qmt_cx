@@ -22,6 +22,9 @@
   - 会调用 `get_instrument_detail` 读取 `OpenDate`、`ExpireDate`、`InstrumentStatus`、`IsTrading`，用于识别目标日尚未上市、目标日已退市/到期、当前合约停牌状态。
   - 合约状态输出会按官方特殊值做中文解释：`OpenDate=19700101..19700106`、`ExpireDate=0/99999999`、`InstrumentStatus<=0/>=1`、`ProductType`。
   - 输出初始缺失清单、停牌标记清单和合约状态清单；如果触发下载，再输出下载后仍缺失清单和下载后停牌标记清单。
+- `verify_suspend_flag_field.py`
+  - 单独验证 `get_market_data_ex/get_local_data` 是否能返回 `suspendFlag` 字段。
+  - 同时打印样本股票的 `get_instrument_detail` 状态，用来区分“字段不可用”和“目标日没有行情行”。
 - `example_download_then_get_market_data_ex.py`
   - 单只股票示例：先直接 `get_market_data_ex`，再 `download_history_data`，再 `get_market_data_ex`。
   - 用下载前后对比说明“取不到历史行情是否因为未下载”。
@@ -34,6 +37,7 @@
 ```powershell
 d:\python_envs\gd_qmt_env\python.exe code/miniqmt_tools/find_stocks_by_price_range.py
 d:\python_envs\gd_qmt_env\python.exe code/miniqmt_tools/check_missing_market_data.py
+d:\python_envs\gd_qmt_env\python.exe code/miniqmt_tools/verify_suspend_flag_field.py
 d:\python_envs\gd_qmt_env\python.exe code/miniqmt_tools/example_download_then_get_market_data_ex.py
 d:\python_envs\gd_qmt_env\python.exe code/miniqmt_tools/example_get_local_data.py
 ```
