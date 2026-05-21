@@ -27,6 +27,7 @@
 7. `reporting.py`：指标、摘要和报告输出。
 8. `prepare_financial_data.py`：财务数据下载、读取、缓存和覆盖率诊断。
 9. `financial_factors.py`：把公告日口径财务数据转成点时可见因子。
+10. `run_portfolio_experiments.py`：复用已有预测结果，批量测试 TopN、调仓频率和排名缓冲。
 
 这样拆分后，入口文件只负责启动，不再承载具体业务逻辑。
 
@@ -42,6 +43,12 @@ d:\python_envs\gd_qmt_env\python.exe code/ml_stock_selection/lightgbm_multi_fact
 
 ```powershell
 d:\python_envs\gd_qmt_env\python.exe code/ml_stock_selection/lightgbm_multi_factor_stock_selection.py
+```
+
+组合参数也可以在主脚本中直接指定：
+
+```powershell
+d:\python_envs\gd_qmt_env\python.exe code/ml_stock_selection/lightgbm_multi_factor_stock_selection.py --top-n 50 --rebalance-frequency weekly --hold-rank-buffer 100
 ```
 
 ## 财务因子
@@ -91,6 +98,32 @@ d:\python_envs\gd_qmt_env\python.exe code/ml_stock_selection/lightgbm_multi_fact
 - 可以先用 `--max-stocks 1` 做最小验证。
 - 如果只想验证近期数据，可加 `--start-date 20250101` 缩短读取范围。
 - 失败不会中断全量流程，失败明细会写入 `financial_download_failures.csv`。
+
+## 组合实验矩阵
+
+如果已经有某次运行的 `predictions.csv`，可以不重训模型，直接批量测试组合构造：
+
+```powershell
+d:\python_envs\gd_qmt_env\python.exe code/ml_stock_selection/run_portfolio_experiments.py --run-dirs code/ml_stock_selection/outputs/lightgbm_multi_factor_stock_selection/20260521_171405_start20200101_end20260511_pred20250101_all code/ml_stock_selection/outputs/lightgbm_multi_factor_stock_selection/20260521_171836_start20200101_end20260511_pred20250101_all --labels market_only financial
+```
+
+默认矩阵：
+
+- TopN：`20 / 50 / 100`
+- 调仓频率：`daily / weekly`
+- 排名缓冲：`0 / TopN*2`
+
+输出目录：
+
+```text
+code/ml_stock_selection/outputs/portfolio_experiments/<run_id>/
+```
+
+主要输出：
+
+- `experiment_summary.csv`：所有组合实验汇总。
+- `experiment_report.md`：按含成本收益排序的人读报告。
+- 每个实验子目录下会保存 `selected_portfolio.csv`、`daily_nav.csv`、`trades.csv`、`summary.json`。
 
 ## 输出
 

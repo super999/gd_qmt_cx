@@ -136,6 +136,10 @@ class ResultWriter:
                 "max_drawdown_with_cost": float(self.metrics.max_drawdown(daily_df["nav"])),
                 "win_rate": float((daily_df["net_return"] > 0).mean()),
                 "avg_turnover": float(daily_df["turnover"].mean()),
+                "total_cost": float(daily_df["cost"].sum()),
+                "avg_retained_count": float(daily_df["retained_count"].mean()) if "retained_count" in daily_df.columns else 0.0,
+                "avg_added_count": float(daily_df["added_count"].mean()) if "added_count" in daily_df.columns else 0.0,
+                "avg_removed_count": float(daily_df["removed_count"].mean()) if "removed_count" in daily_df.columns else 0.0,
             }
         return {
             "run_id": run_id,
@@ -155,6 +159,9 @@ class ResultWriter:
             "prediction_rows": int(len(pred_df)),
             "train_rounds": len(train_logs),
             "top_n": self.config.top_n,
+            "rebalance_frequency": self.config.rebalance_frequency,
+            "hold_rank_buffer": self.config.hold_rank_buffer,
+            "min_holding_days": self.config.min_holding_days,
             "transaction_cost_rate": self.config.transaction_cost_rate,
             "use_financial_factors": self.config.use_financial_factors,
             "financial_cache_dir": str(self.config.financial_cache_dir),
@@ -211,6 +218,9 @@ class ResultWriter:
             "- 预测行数：{}".format(summary["prediction_rows"]),
             "- 训练轮数：{}".format(summary["train_rounds"]),
             "- TopN：{}".format(summary["top_n"]),
+            "- 调仓频率：{}".format(summary["rebalance_frequency"]),
+            "- 排名缓冲：{}".format(summary["hold_rank_buffer"]),
+            "- 最少持有天数：{}".format(summary["min_holding_days"]),
             "- 单边交易成本：{}".format(summary["transaction_cost_rate"]),
             "- 财务因子：{}".format("启用" if summary["use_financial_factors"] else "未启用"),
             "",
@@ -229,6 +239,10 @@ class ResultWriter:
                     "- 最大回撤（含成本）：{:.4%}".format(portfolio["max_drawdown_with_cost"]),
                     "- 日胜率：{:.2%}".format(portfolio["win_rate"]),
                     "- 平均换手：{:.4f}".format(portfolio["avg_turnover"]),
+                    "- 总成本：{:.4%}".format(portfolio["total_cost"]),
+                    "- 平均保留数：{:.2f}".format(portfolio["avg_retained_count"]),
+                    "- 平均新增数：{:.2f}".format(portfolio["avg_added_count"]),
+                    "- 平均移除数：{:.2f}".format(portfolio["avg_removed_count"]),
                 ]
             )
         else:

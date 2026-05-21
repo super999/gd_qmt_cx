@@ -54,6 +54,9 @@ class StrategyConfig:
     batch_size: int = 300
     hold_days_for_label: int = 5
     top_n: int = 20
+    rebalance_frequency: str = "daily"
+    hold_rank_buffer: int = 0
+    min_holding_days: int = 1
     transaction_cost_rate: float = 0.0003
     min_listing_days: int = 60
     min_avg_amount_20: int = 20_000_000

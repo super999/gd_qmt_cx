@@ -39,6 +39,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-stocks", type=int, default=None, help="小样本冒烟时限制股票数量；默认全量")
     parser.add_argument("--min-train-samples", type=int, default=3000)
     parser.add_argument("--min-prediction-date", default="20240101")
+    parser.add_argument("--top-n", type=int, default=20, help="组合持仓数量")
+    parser.add_argument("--rebalance-frequency", choices=["daily", "weekly"], default="daily", help="调仓频率")
+    parser.add_argument("--hold-rank-buffer", type=int, default=0, help="排名缓冲；例如 Top20 可设 40")
+    parser.add_argument("--min-holding-days", type=int, default=1, help="最少持有交易日数")
     parser.add_argument("--use-financial-factors", action="store_true", help="启用本地缓存中的公告日口径财务因子")
     parser.add_argument("--financial-cache-dir", default=None, help="财务缓存目录；默认 code/ml_stock_selection/outputs/financial_cache")
     return parser.parse_args()
@@ -50,6 +54,10 @@ def build_config(args: argparse.Namespace) -> StrategyConfig:
         end_date=args.end_date,
         min_train_samples=args.min_train_samples,
         min_prediction_date=args.min_prediction_date,
+        top_n=args.top_n,
+        rebalance_frequency=args.rebalance_frequency,
+        hold_rank_buffer=args.hold_rank_buffer,
+        min_holding_days=args.min_holding_days,
         use_financial_factors=args.use_financial_factors,
     )
     if args.financial_cache_dir:
@@ -58,6 +66,10 @@ def build_config(args: argparse.Namespace) -> StrategyConfig:
             end_date=args.end_date,
             min_train_samples=args.min_train_samples,
             min_prediction_date=args.min_prediction_date,
+            top_n=args.top_n,
+            rebalance_frequency=args.rebalance_frequency,
+            hold_rank_buffer=args.hold_rank_buffer,
+            min_holding_days=args.min_holding_days,
             use_financial_factors=args.use_financial_factors,
             financial_cache_dir=Path(args.financial_cache_dir),
         )
@@ -71,6 +83,10 @@ def main() -> int:
     print("LightGBM: {}".format(lgb.__version__))
     print("日期范围: {} 至 {}".format(config.start_date, config.end_date))
     print("max_stocks: {}".format(args.max_stocks))
+    print("TopN: {}".format(config.top_n))
+    print("调仓频率: {}".format(config.rebalance_frequency))
+    print("排名缓冲: {}".format(config.hold_rank_buffer))
+    print("最少持有天数: {}".format(config.min_holding_days))
     print("交易成本: 单边 {}".format(config.transaction_cost_rate))
     print("财务因子: {}".format("启用" if config.use_financial_factors else "未启用"))
     if config.use_financial_factors:
