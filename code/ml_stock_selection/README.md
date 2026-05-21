@@ -113,6 +113,12 @@ d:\python_envs\gd_qmt_env\python.exe code/ml_stock_selection/run_portfolio_exper
 - 调仓频率：`daily / weekly`
 - 排名缓冲：`0 / TopN*2`
 
+也可以指定更细的矩阵：
+
+```powershell
+d:\python_envs\gd_qmt_env\python.exe code/ml_stock_selection/run_portfolio_experiments.py --run-dirs <run_dir_1> <run_dir_2> --labels market_only financial --top-n-values 30,50,80,100,150 --rebalance-frequencies weekly --buffer-multipliers 0,1,1.5,2,3
+```
+
 输出目录：
 
 ```text

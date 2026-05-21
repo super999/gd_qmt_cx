@@ -26,6 +26,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--labels", nargs="*", default=None, help="可选标签，数量需与 run-dirs 一致")
     parser.add_argument("--top-n-values", default="20,50,100", help="逗号分隔 TopN 列表")
     parser.add_argument("--rebalance-frequencies", default="daily,weekly", help="逗号分隔调仓频率")
+    parser.add_argument("--buffer-multipliers", default="0,2", help="逗号分隔排名缓冲倍数；例如 0,1,1.5,2,3")
     parser.add_argument("--min-holding-days", type=int, default=1)
     return parser.parse_args()
 
@@ -36,6 +37,15 @@ def parse_int_list(value: str) -> List[int]:
 
 def parse_str_list(value: str) -> List[str]:
     return [part.strip() for part in value.split(",") if part.strip()]
+
+
+def parse_float_list(value: str) -> List[float]:
+    return [float(part.strip()) for part in value.split(",") if part.strip()]
+
+
+def build_buffer_values(top_n: int, multipliers: List[float]) -> List[int]:
+    values = [int(round(top_n * multiplier)) for multiplier in multipliers]
+    return list(dict.fromkeys(values))
 
 
 def load_run_label(run_dir: Path, fallback: str) -> str:
@@ -174,7 +184,7 @@ def build_report(summary_df: pd.DataFrame, output_dir: Path) -> str:
             "",
             "- `daily` 表示每日按排序调仓。",
             "- `weekly` 表示每周第一个可用预测日调仓，其余交易日沿用上一期持仓。",
-            "- `buffer0` 表示无排名缓冲；`buffer40/100/200` 表示旧持仓在对应排名内时优先保留。",
+            "- `buffer0` 表示无排名缓冲；其他 `bufferN` 表示旧持仓在对应排名内时优先保留。",
         ]
     )
     return "\n".join(lines) + "\n"
@@ -194,6 +204,7 @@ def main() -> int:
     labels = validate_args(args)
     top_n_values = parse_int_list(args.top_n_values)
     frequencies = parse_str_list(args.rebalance_frequencies)
+    buffer_multipliers = parse_float_list(args.buffer_multipliers)
     output_dir = Path(__file__).resolve().parent / "outputs" / "portfolio_experiments" / datetime.now().strftime("%Y%m%d_%H%M%S")
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -209,7 +220,7 @@ def main() -> int:
         pred_df = pd.read_csv(predictions_path, encoding="utf-8-sig")
         pred_df["trade_date"] = pred_df["trade_date"].astype(str)
         for top_n in top_n_values:
-            buffer_values = [0, top_n * 2]
+            buffer_values = build_buffer_values(top_n, buffer_multipliers)
             for frequency in frequencies:
                 for buffer_rank in buffer_values:
                     summary = run_one_experiment(
