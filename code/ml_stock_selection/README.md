@@ -28,6 +28,7 @@
 8. `prepare_financial_data.py`：财务数据下载、读取、缓存和覆盖率诊断。
 9. `financial_factors.py`：把公告日口径财务数据转成点时可见因子。
 10. `run_portfolio_experiments.py`：复用已有预测结果，批量测试 TopN、调仓频率和排名缓冲。
+11. `analyze_portfolio_quality.py`：复用组合实验输出，分析月度收益、最差月份和收益回撤比。
 
 这样拆分后，入口文件只负责启动，不再承载具体业务逻辑。
 
@@ -130,6 +131,15 @@ code/ml_stock_selection/outputs/portfolio_experiments/<run_id>/
 - `experiment_summary.csv`：所有组合实验汇总。
 - `experiment_report.md`：按含成本收益排序的人读报告。
 - 每个实验子目录下会保存 `selected_portfolio.csv`、`daily_nav.csv`、`trades.csv`、`summary.json`。
+
+收益质量分析：
+
+```powershell
+d:\python_envs\gd_qmt_env\python.exe code/ml_stock_selection/analyze_portfolio_quality.py --experiment-dirs code/ml_stock_selection/outputs/portfolio_experiments/20260521_213609 code/ml_stock_selection/outputs/portfolio_experiments/20260521_210924
+```
+
+`buffer0` 表示没有排名缓冲：每次调仓时只看当期排名，旧持仓没有保留优先权。  
+例如 `top150_weekly_buffer450` 表示每周调仓、目标持有 150 只；旧持仓只要当期排名仍在前 450，就优先保留，再用新高分股票补足 150 只。
 
 ## 输出
 
