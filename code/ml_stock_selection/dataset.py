@@ -6,6 +6,7 @@ import numpy as np
 import pandas as pd
 
 from config import StrategyConfig
+from financial_factors import FinancialFactorBuilder
 from utils import date_int, is_st_name, normalize_date, safe_divide
 
 
@@ -14,6 +15,7 @@ class FactorDatasetBuilder:
 
     def __init__(self, config: StrategyConfig) -> None:
         self.config = config
+        self.financial_factor_builder = FinancialFactorBuilder(config) if config.use_financial_factors else None
 
     def build(self, data_by_code: Dict[str, pd.DataFrame], details: Dict[str, Dict[str, Any]]) -> pd.DataFrame:
         frames: List[pd.DataFrame] = []
@@ -28,7 +30,17 @@ class FactorDatasetBuilder:
         dataset = pd.concat(frames, ignore_index=True)
         dataset = dataset.replace([np.inf, -np.inf], np.nan)
         dataset["trade_date"] = dataset["trade_date"].astype(str)
+        if self.financial_factor_builder is not None:
+            dataset = self._merge_financial_factors(dataset)
         return dataset.sort_values(["trade_date", "code"]).reset_index(drop=True)
+
+    def _merge_financial_factors(self, dataset: pd.DataFrame) -> pd.DataFrame:
+        print("读取并合并公告日口径财务因子...")
+        financial_factors = self.financial_factor_builder.build_for_dataset(dataset)
+        if financial_factors.empty:
+            raise RuntimeError("已启用财务因子，但未生成任何财务因子行。")
+        merged = dataset.merge(financial_factors, on=["code", "trade_date"], how="left")
+        return merged
 
     def _prepare_one_stock(self, code: str, frame: pd.DataFrame, detail: Dict[str, Any]) -> pd.DataFrame:
         if not isinstance(frame, pd.DataFrame) or frame.empty:
@@ -147,4 +159,4 @@ class FactorDatasetBuilder:
             "future_max_drawdown_5d",
             "target_risk_5d",
             "realized_next_open_return",
-        ] + self.config.feature_cols
+        ] + self.config.market_feature_cols

@@ -1,0 +1,160 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <title>LightGBM 财务因子使用指南</title>
+  <style>
+    body {
+      font-family: "Microsoft YaHei", Arial, sans-serif;
+      line-height: 1.7;
+      margin: 32px auto;
+      max-width: 980px;
+      color: #1f2933;
+      background: #ffffff;
+    }
+    h1, h2 {
+      color: #102a43;
+    }
+    code, pre {
+      font-family: Consolas, "Courier New", monospace;
+      background: #f5f7fa;
+    }
+    pre {
+      padding: 14px 16px;
+      overflow-x: auto;
+      border: 1px solid #d9e2ec;
+      border-radius: 6px;
+    }
+    table {
+      border-collapse: collapse;
+      width: 100%;
+      margin: 12px 0 24px;
+    }
+    th, td {
+      border: 1px solid #d9e2ec;
+      padding: 8px 10px;
+      text-align: left;
+    }
+    th {
+      background: #f0f4f8;
+    }
+    .note {
+      border-left: 4px solid #2f80ed;
+      background: #f5f9ff;
+      padding: 10px 14px;
+      margin: 14px 0;
+    }
+    .warn {
+      border-left: 4px solid #d64545;
+      background: #fff5f5;
+      padding: 10px 14px;
+      margin: 14px 0;
+    }
+  </style>
+</head>
+<body>
+  <h1>LightGBM 财务因子使用指南</h1>
+
+  <h2>1. 先说结论</h2>
+  <p>
+    财务因子已经接入 <code>code/ml_stock_selection</code>，但模型主流程不会自动下载财务数据。
+    正确流程是先运行 <code>prepare_financial_data.py</code> 生成本地财务缓存，再运行 LightGBM 主脚本并加
+    <code>--use-financial-factors</code>。
+  </p>
+  <div class="note">
+    当前默认下载方式是 <code>legacy</code>，即 <code>xtdata.download_financial_data</code>。
+    这是因为本地实测 <code>download_financial_data2</code> 在较长日期范围下可能阻塞，而旧接口下载后再用
+    <code>get_financial_data(..., report_type="announce_time")</code> 读取更稳定。
+  </div>
+
+  <h2>2. 为什么你之前会 timeout</h2>
+  <p>
+    你运行的是：
+  </p>
+  <pre><code>python code\ml_stock_selection\prepare_financial_data.py --max-stocks 1</code></pre>
+  <p>
+    旧版本脚本在子进程中等进程自然退出后才读取结果。实测 <code>xtdata</code> 可能已经完成下载和读取，
+    但连接线程让子进程没有马上退出，父进程就误判为 timeout。
+  </p>
+  <p>
+    现在已经改为优先等待子进程队列返回结果，拿到结果后再终止子进程，因此不会把已经完成的任务误判成超时。
+  </p>
+
+  <h2>3. 我本机验证通过的参数和结果</h2>
+  <p>验证命令：</p>
+  <pre><code>d:\python_envs\gd_qmt_env\python.exe code\ml_stock_selection\prepare_financial_data.py --max-stocks 1</code></pre>
+  <p>关键输出：</p>
+  <pre><code>日期范围: 20200101 至 20260511
+财务表: PershareIndex
+单任务超时: 30 秒
+下载方式: legacy
+股票池数量: 1
+[1/1] 000001.SZ PershareIndex 正常: 26 行, 表名 PershareIndex
+失败/超时任务数: 0</code></pre>
+
+  <p>批量验证命令：</p>
+  <pre><code>d:\python_envs\gd_qmt_env\python.exe code\ml_stock_selection\prepare_financial_data.py --max-stocks 5 --stock-batch-size 5 --tables PershareIndex --timeout-seconds 30</code></pre>
+  <p>关键输出：</p>
+  <pre><code>股票池数量: 5
+[批次 1/1] PershareIndex 5 只: 成功 5, 失败/超时 0
+raw_PershareIndex.csv: 140 行</code></pre>
+
+  <h2>4. 推荐使用顺序</h2>
+  <h3>4.1 最小冒烟</h3>
+  <pre><code>d:\python_envs\gd_qmt_env\python.exe code\ml_stock_selection\prepare_financial_data.py --max-stocks 1</code></pre>
+
+  <h3>4.2 小样本准备财务缓存</h3>
+  <pre><code>d:\python_envs\gd_qmt_env\python.exe code\ml_stock_selection\prepare_financial_data.py --max-stocks 20 --tables PershareIndex</code></pre>
+  <p>
+    脚本默认每批请求 20 只股票，即 <code>--stock-batch-size 20</code>。
+    如果某个批次超时或异常，脚本会自动拆成更小批次继续尝试，直到定位到单只失败标的。
+    因此它不是“一次一只”，而是“正常批量、异常拆分”。
+  </p>
+
+  <h3>4.3 小样本运行财务增强 LightGBM</h3>
+  <pre><code>d:\python_envs\gd_qmt_env\python.exe code\ml_stock_selection\lightgbm_multi_factor_stock_selection.py --use-financial-factors --max-stocks 20 --start-date 20250101 --end-date 20260511 --min-prediction-date 20260101 --min-train-samples 200</code></pre>
+
+  <h3>4.4 扩大股票池</h3>
+  <p>
+    小样本确认后，再把 <code>--max-stocks</code> 从 20 提高到 100、500，最后再考虑全市场。
+    不建议第一次就全市场下载，因为财务接口遇到个别异常股票时需要靠失败清单定位。
+  </p>
+
+  <h2>5. 输出文件</h2>
+  <table>
+    <thead>
+      <tr><th>文件</th><th>用途</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><code>raw_PershareIndex.csv</code></td><td>公告日口径主要指标原始缓存</td></tr>
+      <tr><td><code>financial_coverage_report.csv</code></td><td>逐股票、逐表下载读取结果</td></tr>
+      <tr><td><code>financial_schema_report.csv</code></td><td>字段、类型、非空率</td></tr>
+      <tr><td><code>financial_download_failures.csv</code></td><td>失败和超时任务清单</td></tr>
+    </tbody>
+  </table>
+
+  <h2>6. 财务因子口径</h2>
+  <p>
+    第一批财务因子来自 <code>PershareIndex</code>，包括营收同比、净利润同比、归母净利润同比、ROE、
+    毛利率、净利率、销售现金流/营业收入、资产负债率、存货周转率。
+  </p>
+  <p>
+    合并规则是 <code>m_anntime &lt; trade_date</code>。也就是说，公告日当天不用于当日收盘打分，
+    只从公告日之后的交易日开始可见，避免未来函数。
+  </p>
+
+  <h2>7. 常见问题</h2>
+  <div class="warn">
+    <strong>出现 timeout：</strong>
+    先确认输出里的下载方式是否为 <code>legacy</code>。如果不是，改回默认或显式加
+    <code>--download-method legacy</code>。
+  </div>
+  <p>
+    如果要测试新版范围下载接口，可以运行：
+  </p>
+  <pre><code>d:\python_envs\gd_qmt_env\python.exe code\ml_stock_selection\prepare_financial_data.py --max-stocks 1 --download-method range</code></pre>
+  <p>
+    但当前建议正式准备缓存时仍使用默认 <code>legacy</code>。
+  </p>
+</body>
+</html>

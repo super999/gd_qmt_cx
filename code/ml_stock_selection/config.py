@@ -29,6 +29,19 @@ FEATURE_LABELS: Dict[str, str] = {
 }
 
 
+FINANCIAL_FEATURE_LABELS: Dict[str, str] = {
+    "fin_inc_revenue_rate": "主营收入同比增长",
+    "fin_du_profit_rate": "净利润同比增长",
+    "fin_inc_net_profit_rate": "归母净利润同比增长",
+    "fin_du_return_on_equity": "净资产收益率",
+    "fin_gross_profit": "毛利率",
+    "fin_net_profit": "净利率",
+    "fin_sales_cash_flow": "销售现金流/营业收入",
+    "fin_gear_ratio": "资产负债率",
+    "fin_inventory_turnover": "存货周转率",
+}
+
+
 @dataclass(frozen=True)
 class StrategyConfig:
     start_date: str = "20230101"
@@ -51,11 +64,29 @@ class StrategyConfig:
     min_prediction_date: str = "20240101"
     random_state: int = 20260514
     output_dir: Path = Path(__file__).resolve().parent / "outputs" / "lightgbm_multi_factor_stock_selection"
+    financial_cache_dir: Path = Path(__file__).resolve().parent / "outputs" / "financial_cache"
+    use_financial_factors: bool = False
     feature_labels: Dict[str, str] = field(default_factory=lambda: FEATURE_LABELS.copy())
+    financial_feature_labels: Dict[str, str] = field(default_factory=lambda: FINANCIAL_FEATURE_LABELS.copy())
     open_date_special_values: set[str] = field(
         default_factory=lambda: {"19700101", "19700102", "19700103", "19700104", "19700105", "19700106"}
     )
 
     @property
-    def feature_cols(self) -> List[str]:
+    def market_feature_cols(self) -> List[str]:
         return list(self.feature_labels.keys())
+
+    @property
+    def active_feature_labels(self) -> Dict[str, str]:
+        labels = self.feature_labels.copy()
+        if self.use_financial_factors:
+            labels.update(self.financial_feature_labels)
+        return labels
+
+    @property
+    def financial_feature_cols(self) -> List[str]:
+        return list(self.financial_feature_labels.keys()) if self.use_financial_factors else []
+
+    @property
+    def feature_cols(self) -> List[str]:
+        return list(self.active_feature_labels.keys())

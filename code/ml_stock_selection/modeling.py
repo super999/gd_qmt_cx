@@ -64,7 +64,7 @@ class WalkForwardModeler:
         return pred_df.sort_values(["trade_date", "pred_return_5d"], ascending=[True, False]), train_logs, last_feature_importance
 
     def _clean_train_data(self, df: pd.DataFrame) -> pd.DataFrame:
-        needed = self.config.feature_cols + ["target_return_5d", "target_up_5d", "target_risk_5d"]
+        needed = self.config.market_feature_cols + ["target_return_5d", "target_up_5d", "target_risk_5d"]
         return df[df["base_eligible"]].dropna(subset=needed).copy()
 
     def _feature_frame(self, df: pd.DataFrame) -> pd.DataFrame:
@@ -110,7 +110,7 @@ class WalkForwardModeler:
         return model
 
     def _predict_one_day(self, bundle: ModelBundle, day_df: pd.DataFrame) -> pd.DataFrame:
-        required = self.config.feature_cols + ["entry_date", "realized_next_open_return"]
+        required = self.config.market_feature_cols + ["entry_date", "realized_next_open_return"]
         candidates = day_df[day_df["base_eligible"]].dropna(subset=required).copy()
         if candidates.empty:
             return pd.DataFrame()
@@ -137,7 +137,7 @@ class WalkForwardModeler:
         return pd.DataFrame(
             {
                 "feature": self.config.feature_cols,
-                "feature_cn": [self.config.feature_labels[col] for col in self.config.feature_cols],
+                "feature_cn": [self.config.active_feature_labels[col] for col in self.config.feature_cols],
                 "importance": bundle.return_model.feature_importances_,
             }
         ).sort_values("importance", ascending=False)

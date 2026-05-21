@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import argparse
 import traceback
+from pathlib import Path
 
 try:
     import lightgbm as lgb
@@ -38,16 +39,29 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-stocks", type=int, default=None, help="小样本冒烟时限制股票数量；默认全量")
     parser.add_argument("--min-train-samples", type=int, default=3000)
     parser.add_argument("--min-prediction-date", default="20240101")
+    parser.add_argument("--use-financial-factors", action="store_true", help="启用本地缓存中的公告日口径财务因子")
+    parser.add_argument("--financial-cache-dir", default=None, help="财务缓存目录；默认 code/ml_stock_selection/outputs/financial_cache")
     return parser.parse_args()
 
 
 def build_config(args: argparse.Namespace) -> StrategyConfig:
-    return StrategyConfig(
+    config = StrategyConfig(
         start_date=args.start_date,
         end_date=args.end_date,
         min_train_samples=args.min_train_samples,
         min_prediction_date=args.min_prediction_date,
+        use_financial_factors=args.use_financial_factors,
     )
+    if args.financial_cache_dir:
+        return StrategyConfig(
+            start_date=args.start_date,
+            end_date=args.end_date,
+            min_train_samples=args.min_train_samples,
+            min_prediction_date=args.min_prediction_date,
+            use_financial_factors=args.use_financial_factors,
+            financial_cache_dir=Path(args.financial_cache_dir),
+        )
+    return config
 
 
 def main() -> int:
@@ -58,6 +72,9 @@ def main() -> int:
     print("日期范围: {} 至 {}".format(config.start_date, config.end_date))
     print("max_stocks: {}".format(args.max_stocks))
     print("交易成本: 单边 {}".format(config.transaction_cost_rate))
+    print("财务因子: {}".format("启用" if config.use_financial_factors else "未启用"))
+    if config.use_financial_factors:
+        print("财务缓存目录: {}".format(config.financial_cache_dir))
     try:
         artifacts = ResearchPipeline(config).run(args.max_stocks)
         print_title("完成")
@@ -77,6 +94,7 @@ def main() -> int:
         print("排查提示:")
         print("- 请确认 MiniQMT 已启动，并且本地日线行情已下载。")
         print("- 小样本冒烟可加 --max-stocks 50 --min-train-samples 200。")
+        print("- 如果启用财务因子，请先运行 prepare_financial_data.py 生成本地财务缓存。")
         print("- 如果 LightGBM 导入失败，请先安装 lightgbm。")
         return 1
 

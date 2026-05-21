@@ -156,13 +156,42 @@ class ResultWriter:
             "train_rounds": len(train_logs),
             "top_n": self.config.top_n,
             "transaction_cost_rate": self.config.transaction_cost_rate,
+            "use_financial_factors": self.config.use_financial_factors,
+            "financial_cache_dir": str(self.config.financial_cache_dir),
+            "financial_factor_coverage": self._financial_factor_coverage(dataset),
             "portfolio": portfolio,
             "model_metrics": self.metrics.evaluate_predictions(pred_df),
         }
 
+    def _financial_factor_coverage(self, dataset: pd.DataFrame) -> Dict[str, Any]:
+        if not self.config.use_financial_factors:
+            return {"enabled": False}
+        coverage: Dict[str, Any] = {
+            "enabled": True,
+            "rows": int(len(dataset)),
+            "rows_with_any_financial_factor": 0,
+            "features": {},
+        }
+        feature_cols = [col for col in self.config.financial_feature_cols if col in dataset.columns]
+        if not feature_cols or dataset.empty:
+            return coverage
+        has_any = dataset[feature_cols].notna().any(axis=1)
+        coverage["rows_with_any_financial_factor"] = int(has_any.sum())
+        coverage["any_financial_factor_rate"] = float(has_any.mean())
+        for column in feature_cols:
+            notna = dataset[column].notna()
+            coverage["features"][column] = {
+                "feature_cn": self.config.financial_feature_labels.get(column, ""),
+                "non_null_rows": int(notna.sum()),
+                "non_null_rate": float(notna.mean()),
+                "missing_rate": float(1.0 - notna.mean()),
+            }
+        return coverage
+
     def _build_report(self, summary: Dict[str, Any], feature_importance: pd.DataFrame, output_paths: Dict[str, Path]) -> str:
         portfolio = summary.get("portfolio") or {}
         metrics = summary.get("model_metrics") or {}
+        financial_coverage = summary.get("financial_factor_coverage") or {}
         lines = [
             "# A股全市场 LightGBM 多因子选股 v1",
             "",
@@ -183,6 +212,7 @@ class ResultWriter:
             "- 训练轮数：{}".format(summary["train_rounds"]),
             "- TopN：{}".format(summary["top_n"]),
             "- 单边交易成本：{}".format(summary["transaction_cost_rate"]),
+            "- 财务因子：{}".format("启用" if summary["use_financial_factors"] else "未启用"),
             "",
             "## 组合结果",
             "",
@@ -212,6 +242,31 @@ class ResultWriter:
                 "- 中位数日截面 Rank IC：{}".format(metrics.get("median_daily_rank_ic", "")),
                 "- 涨跌方向 AUC：{}".format(metrics.get("up_auc", "")),
                 "- 风险模型 AUC：{}".format(metrics.get("risk_auc", "")),
+                "",
+                "## 财务因子覆盖率",
+                "",
+            ]
+        )
+        if financial_coverage.get("enabled"):
+            lines.append("- 财务缓存目录：{}".format(summary["financial_cache_dir"]))
+            lines.append("- 任一财务因子非空行数：{} / {}".format(
+                financial_coverage.get("rows_with_any_financial_factor", 0),
+                financial_coverage.get("rows", 0),
+            ))
+            lines.extend(["", "| feature | 中文含义 | 非空率 | 缺失率 |", "| --- | --- | ---: | ---: |"])
+            for feature, item in financial_coverage.get("features", {}).items():
+                lines.append(
+                    "| `{}` | {} | {:.2%} | {:.2%} |".format(
+                        feature,
+                        item.get("feature_cn", ""),
+                        item.get("non_null_rate", 0.0),
+                        item.get("missing_rate", 0.0),
+                    )
+                )
+        else:
+            lines.append("- 未启用财务因子。")
+        lines.extend(
+            [
                 "",
                 "## Top 特征重要性",
                 "",

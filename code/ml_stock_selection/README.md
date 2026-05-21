@@ -9,7 +9,7 @@
   - 这是一个薄入口文件，只负责命令行参数和启动流程。
   - 股票池：`上证A股` + `深证A股`。
   - 数据：`xtdata.get_local_data` 日线，默认前复权 `front`，`fill_data=False`。
-  - 特征：纯行情因子，不使用财务数据。
+  - 特征：默认纯行情因子；可通过本地财务缓存启用公告日口径财务因子。
   - 标签：未来 5 日 open-to-open 收益、未来 5 日涨跌方向、未来 5 日大幅回撤风险。
   - 回测：每日收盘后打分，次日开盘 Top20 等权调仓。
   - 成本：主结果计入单边万分之3，即 `TRANSACTION_COST_RATE = 0.0003`。
@@ -25,6 +25,8 @@
 5. `modeling.py`：LightGBM 训练和 walk-forward 预测。
 6. `portfolio.py`：TopN 选股和每日调仓回测。
 7. `reporting.py`：指标、摘要和报告输出。
+8. `prepare_financial_data.py`：财务数据下载、读取、缓存和覆盖率诊断。
+9. `financial_factors.py`：把公告日口径财务数据转成点时可见因子。
 
 这样拆分后，入口文件只负责启动，不再承载具体业务逻辑。
 
@@ -41,6 +43,54 @@ d:\python_envs\gd_qmt_env\python.exe code/ml_stock_selection/lightgbm_multi_fact
 ```powershell
 d:\python_envs\gd_qmt_env\python.exe code/ml_stock_selection/lightgbm_multi_factor_stock_selection.py
 ```
+
+## 财务因子
+
+模型主流程不会自动下载财务数据。若要启用财务因子，先单独准备缓存：
+
+```powershell
+d:\python_envs\gd_qmt_env\python.exe code/ml_stock_selection/prepare_financial_data.py --max-stocks 20 --tables PershareIndex,Balance,Income,CashFlow
+```
+
+`prepare_financial_data.py` 会批量请求财务接口，默认每批 `20` 只股票。若某个批次超时或异常，会自动拆成更小批次继续尝试，直到定位到单只失败标的。可以用下面参数调整批量大小：
+
+```powershell
+d:\python_envs\gd_qmt_env\python.exe code/ml_stock_selection/prepare_financial_data.py --max-stocks 100 --stock-batch-size 20
+```
+
+默认下载方式是 `legacy`，即 `xtdata.download_financial_data`。实测它在当前环境里比 `download_financial_data2` 更稳定。若要单独测试披露日期范围下载，可以加：
+
+```powershell
+d:\python_envs\gd_qmt_env\python.exe code/ml_stock_selection/prepare_financial_data.py --max-stocks 1 --download-method range
+```
+
+缓存目录：
+
+```text
+code/ml_stock_selection/outputs/financial_cache/
+```
+
+主要文件：
+
+- `raw_PershareIndex.csv`：公告日口径原始主要指标缓存。
+- `financial_coverage_report.csv`：逐股票、逐表覆盖率。
+- `financial_schema_report.csv`：字段、类型和非空率。
+- `financial_download_failures.csv`：下载、读取、超时失败清单。
+
+准备完成后，再启用财务因子运行：
+
+```powershell
+d:\python_envs\gd_qmt_env\python.exe code/ml_stock_selection/lightgbm_multi_factor_stock_selection.py --use-financial-factors --max-stocks 50 --start-date 20250101 --end-date 20260511 --min-train-samples 200
+```
+
+当前第一批财务因子来自 `PershareIndex`，包括营收同比、净利润同比、归母净利润同比、ROE、毛利率、净利率、销售现金流/营业收入、资产负债率和存货周转率。合并规则是 `m_anntime < trade_date`，即公告日当天不用于当日收盘打分，只从后续交易日开始可见。
+
+如果准备脚本出现 `timeout`：
+
+- 先确认命令输出里的 `下载方式`。建议默认使用 `legacy`。
+- 可以先用 `--max-stocks 1` 做最小验证。
+- 如果只想验证近期数据，可加 `--start-date 20250101` 缩短读取范围。
+- 失败不会中断全量流程，失败明细会写入 `financial_download_failures.csv`。
 
 ## 输出
 
@@ -80,4 +130,6 @@ code/ml_stock_selection/outputs/lightgbm_multi_factor_stock_selection/<run_id>/
 - 运行前请确认 MiniQMT 已启动，且本地日线行情已下载。
 - 第一版不使用财务数据，避免财务下载阻塞和披露日未来函数问题。
 - 当前 ST 过滤基于 `get_instrument_detail` 返回的当前名称，不能代表完整历史 ST 状态。
+- 财务因子只读取本地缓存；如果缓存不存在，需要先运行 `prepare_financial_data.py`。
+- 财务因子允许缺失，LightGBM 会处理 `NaN`，报告会输出每个财务因子的覆盖率。
 - 交易成本按换手扣除，买入和卖出单边均使用 `0.0003`。
