@@ -32,6 +32,10 @@
 - `example_get_local_data.py`
   - 单只股票示例：先 `download_history_data`，再用 `get_local_data` 从本地行情库读取。
   - 同时用 `get_market_data_ex` 做对照，便于理解两个接口的返回结构。
+- `财务接口/verify_financial_data_api.py`
+  - 逐标的、逐财务表验证 `download_financial_data` 与 `get_financial_data`。
+  - 每个子任务独立加超时，避免一个异常组合拖死整次检查。
+  - 当前验证结论已沉淀到 `报告/环境与规范/MiniQMT_财务数据接口验证记录.md`。
 
 ## 推荐运行环境
 
@@ -41,6 +45,7 @@ d:\python_envs\gd_qmt_env\python.exe code/miniqmt_tools/check_missing_market_dat
 d:\python_envs\gd_qmt_env\python.exe code/miniqmt_tools/verify_suspend_flag_field.py
 d:\python_envs\gd_qmt_env\python.exe code/miniqmt_tools/example_download_then_get_market_data_ex.py
 d:\python_envs\gd_qmt_env\python.exe code/miniqmt_tools/example_get_local_data.py
+d:\python_envs\gd_qmt_env\python.exe code/miniqmt_tools/财务接口/verify_financial_data_api.py
 ```
 
 运行前请确认 MiniQMT 已启动，且行情连接正常。

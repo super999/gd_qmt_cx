@@ -59,12 +59,14 @@
 
 当前不建议把这些作为回测主依赖：
 
-- `xtdata.download_financial_data`
-原因：已实测阻塞
 - `xtdata.get_trading_calendar`
 原因：当前客户端不支持
 - `xtdata.get_period_list`
 原因：当前客户端不支持
+
+补充：
+
+- `xtdata.download_financial_data` 已于 `2026-05-16` 在 Level2 开通后重新验证可用，但个别“股票 + 表”组合仍可能阻塞，因此应配合超时保护和失败清单使用。
 
 ## 已实测返回值格式摘要
 
@@ -91,7 +93,8 @@
 | `xtdata.get_divid_factors` | `可用` | 返回 `pandas.DataFrame`，当前测试结果为空表 |
 | `xtdata.get_trading_calendar` | `不可用` | 当前客户端直接抛 `RuntimeError`，提示 `function not realize` |
 | `xtdata.get_period_list` | `不可用` | 当前客户端直接抛 `RuntimeError`，提示 `function not realize` |
-| `xtdata.download_financial_data` | `阻塞` | 25 秒超时内无返回 |
+| `xtdata.download_financial_data` | `可用（需超时保护）` | 2026-05-16 常规样例可正常下载；个别股票/表组合仍可能阻塞 |
+| `xtdata.get_financial_data` | `可用` | 可按 `report_time` / `announce_time` 返回 `dict[股票 -> dict[表 -> DataFrame]]` |
 
 ## 回测代码编写前建议补充的最小背景文档
 
@@ -103,7 +106,7 @@
 
 - 当前推荐 Python 环境：`d:\python_envs\gd_qmt_env`
 - 当前已验证可用的 xtdata 接口清单
-- 当前明确不可依赖的接口：`download_financial_data`、`get_trading_calendar`、`get_period_list`
+- 当前明确不可依赖的接口：`get_trading_calendar`、`get_period_list`
 - 回测优先数据来源：`get_local_data` / `get_market_data_ex`
 - 当前交易日历替代方案：
   因 `get_trading_calendar` 不可用，短期内需要手工维护交易日，或引入外部交易日历
@@ -177,7 +180,8 @@
 
 | API 名称 | 状态 | 证据来源 | 测试脚本 | 现象说明 | 备注/下一步 |
 | --- | --- | --- | --- | --- | --- |
-| `xtdata.download_financial_data` | `阻塞` | `code/run_xtquant/test_xtquant_api_matrix.py` 实测；用户口头反馈 | `code/run_xtquant/test_xtquant_api_matrix.py` | 2026-04-22 实测在 `600519.SH` 上调用后，25 秒超时内没有返回，已由子进程超时终止。 | 这已经从“用户反馈”升级为“本地复现确认”；后续应继续排查权限、数据源或接口本身限制。 |
+| `xtdata.download_financial_data` | `可用（需超时保护）` | `code/miniqmt_tools/财务接口/verify_financial_data_api.py` 实测 | `code/miniqmt_tools/财务接口/verify_financial_data_api.py` | 2026-05-16 在已开通 Level2 后，对 `000001.SZ`、`600519.SH` 的 `Balance/Income/CashFlow` 逐表下载均正常。另发现 `002422.SZ + Income` 组合仍会阻塞。 | 旧的 2026-04-22 “阻塞”结论已过期；正式批量任务应加入逐任务超时与失败清单。 |
+| `xtdata.get_financial_data` | `可用` | `code/miniqmt_tools/财务接口/verify_financial_data_api.py` 实测 | `code/miniqmt_tools/财务接口/verify_financial_data_api.py` | 2026-05-16 对 `000001.SZ`、`600519.SH` 的 `Balance/Income/CashFlow`，`report_time` 与 `announce_time` 均能正常返回数据。 | 回测中若需要点时可见口径，应优先使用 `announce_time`。详细见 `报告/环境与规范/MiniQMT_财务数据接口验证记录.md`。 |
 | `xtdata.get_divid_factors` | `可用` | `code/run_xtquant/test_xtquant_api_matrix.py` 第二轮实测 | `code/run_xtquant/test_xtquant_api_matrix.py` | 2026-04-22 实测接口可调用，返回类型为 `DataFrame`，但在 `600519.SH`、`20200101-20260422` 条件下结果为空。 | 这说明接口本身没有报错；后续若你要做复权核验，需要换更多标的或时间区间继续验证数据覆盖情况。 |
 | `xtdata.get_holidays` | `可用` | `code/run_xtquant/test_xtquant_api_matrix.py` 第二轮实测 | `code/run_xtquant/test_xtquant_api_matrix.py` | 2026-04-22 实测接口可调用，但当前返回空列表。 | 空列表不等于接口不可用，更像当前客户端未预置或未下载节假日数据。 |
 | `xtdata.get_trading_calendar` | `不可用` | `code/run_xtquant/test_xtquant_api_matrix.py` 第二轮实测 | `code/run_xtquant/test_xtquant_api_matrix.py` | 2026-04-22 实测直接抛出 `RuntimeError`，提示“当前客户端未支持此功能，请更新客户端或升级投研版”，底层错误为 `function not realize`。 | 对策略/回测是关键缺口。短期内可先用外部交易日历替代，或尝试升级客户端后再测。 |
@@ -206,12 +210,12 @@
 - 2026-04-22 我已在本地亲自跑通：`xtdata` 导入、`xttrader` 导入、历史行情下载、`get_market_data`、`get_market_data_ex`、`get_local_data`、`subscribe_quote`、`xtdata.run` 回调链路、`get_sector_list`、`get_stock_list_in_sector`、`get_instrument_detail`、`get_holidays`、`get_divid_factors`。
 - 2026-04-23 在 QMT 内实测跑通：`ContextInfo.subscribe_quote`（510300.SH tick + 1m 回调）、`ContextInfo.subscribe_whole_quote`（4只ETF全推快照回调）。两种订阅均确认回调数据正常，含价格、成交量/笔数、五档盘口等字段。全推行情推送速度略快于单只订阅。
 - QMT 内订阅回调函数签名注意：只接收1个参数 `datas`，不需要 `ContextInfo`（与 init/handlebar 不同）。
-- `xtdata.download_financial_data` 已在本地复现阻塞，25 秒超时保护内仍无返回。
+- `xtdata.download_financial_data` 已在 `2026-05-16` 重新验证为可用，但个别股票/表组合仍可能阻塞。
 - `xtdata.get_trading_calendar` 和 `xtdata.get_period_list` 在当前客户端上不是“没数据”，而是明确“不支持此功能”，错误信息为 `function not realize`。
 - 当前“可用”主要表示接口在当前环境下可调用并返回，不代表交易接口的完整业务链路已验证。
 
 ## 后续优先补测建议
 
-1. 为 `xtdata.download_financial_data` 继续做最小复现和分步排查，确认是否与权限、证券代码、数据目录状态有关。
+1. 为财务数据补一份全市场覆盖率检查，统计各股票各表的缺失和异常组合。
 2. 单独补一份交易接口自检，至少覆盖连接、账户查询、委托查询或资产查询三类证据。
 3. 如果你后面必须依赖交易日历，尽快决定是升级客户端/投研版，还是在策略层引入外部交易日历替代方案。
