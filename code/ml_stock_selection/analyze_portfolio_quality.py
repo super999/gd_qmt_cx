@@ -30,13 +30,14 @@ def monthly_returns(daily_df: pd.DataFrame) -> pd.DataFrame:
     df = daily_df.copy()
     df["trade_date"] = df["trade_date"].astype(str)
     df["month"] = df["trade_date"].str.slice(0, 6)
+    gross_col = "gross_return" if "gross_return" in df.columns else "net_return"
     rows: List[Dict[str, Any]] = []
     for month, month_df in df.groupby("month"):
         rows.append(
             {
                 "month": month,
                 "month_return": float((1.0 + month_df["net_return"]).prod() - 1.0),
-                "month_gross_return": float((1.0 + month_df["gross_return"]).prod() - 1.0),
+                "month_gross_return": float((1.0 + month_df[gross_col]).prod() - 1.0),
                 "days": int(len(month_df)),
                 "avg_turnover": float(month_df["turnover"].mean()),
                 "total_cost": float(month_df["cost"].sum()),
@@ -136,6 +137,7 @@ def load_experiment_matrix(experiment_root: Path) -> pd.DataFrame:
     candidates = [
         experiment_root / "experiment_summary.csv",
         experiment_root / "financial_filter_summary.csv",
+        experiment_root / "small_capital_summary.csv",
     ]
     for path in candidates:
         if path.exists():

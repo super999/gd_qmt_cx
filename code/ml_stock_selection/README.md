@@ -30,6 +30,7 @@
 10. `run_portfolio_experiments.py`：复用已有预测结果，批量测试 TopN、调仓频率和排名缓冲。
 11. `run_financial_filter_experiments.py`：复用已有财务增强预测结果，测试成长、质量和低 PB 代理过滤。
 12. `analyze_portfolio_quality.py`：复用组合实验输出，分析月度收益、最差月份和收益回撤比。
+13. `run_small_capital_experiments.py`：把研究组合转换成小资金、最小买入金额和有限持仓数约束下的近似实盘回测。
 
 这样拆分后，入口文件只负责启动，不再承载具体业务逻辑。
 
@@ -186,6 +187,28 @@ code/ml_stock_selection/outputs/financial_filter_experiments/<run_id>/
 ```powershell
 d:\python_envs\gd_qmt_env\python.exe code/ml_stock_selection/analyze_portfolio_quality.py --experiment-dirs code/ml_stock_selection/outputs/financial_filter_experiments/<run_id>
 ```
+
+## 小资金实盘约束近似回测
+
+如果资金规模较小，不能直接照搬 `Top100/Top150` 宽组合研究结果。可以先用下面脚本测试“40 万资金、单只最小买入 3 万、最多持有 5/8/10/12 只、保留 10%/25% 现金”的近似实盘约束：
+
+```powershell
+d:\python_envs\gd_qmt_env\python.exe code/ml_stock_selection/run_small_capital_experiments.py --run-dirs <financial_run_dir> --labels financial --filters none,growth_q50,bp_value_q70 --capital 400000 --min-trade-amount 30000 --max-holdings-values 5,8,10,12 --cash-reserve-rates 0.10,0.25
+```
+
+输出目录：
+
+```text
+code/ml_stock_selection/outputs/small_capital_experiments/<run_id>/
+```
+
+主要输出：
+
+- `small_capital_summary.csv`：所有小资金实验汇总。
+- `small_capital_report.md`：按风险优先排序的人读报告。
+- 每个实验子目录下保存 `daily_nav.csv`、`holdings.csv`、`trades.csv`、`summary.json`。
+
+注意：当前预测文件没有次日开盘价列，所以该脚本使用信号日 `close` 近似估算买入金额和 100 股整数倍，收益仍使用既有 `realized_next_open_return`。它用于评估小资金仓位约束，不等同于正式撮合回测。
 
 ## 输出
 
