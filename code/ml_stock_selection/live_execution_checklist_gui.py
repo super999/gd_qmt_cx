@@ -217,6 +217,7 @@ class LiveExecutionChecklistGui:
         ttk.Label(expected, text="预期最新交易日 YYYYMMDD").pack(side=tk.LEFT, padx=8, pady=8)
         ttk.Entry(expected, textvariable=self.expected_date_var, width=12).pack(side=tk.LEFT)
         ttk.Button(expected, text="一键自动检查", command=self.run_auto_checks).pack(side=tk.LEFT, padx=(12, 0))
+        return page
 
     def _build_auto_page(self) -> ttk.Frame:
         page = self._page()
@@ -233,6 +234,7 @@ class LiveExecutionChecklistGui:
         self.auto_tree.pack(fill=tk.X)
         self._reload_auto_tree()
         ttk.Button(page, text="刷新自动检查", command=self.run_auto_checks).pack(anchor=tk.W, pady=(10, 0))
+        return page
 
     def _build_risk_page(self) -> ttk.Frame:
         page = self._page()
@@ -259,6 +261,7 @@ class LiveExecutionChecklistGui:
         ttk.Label(result, textvariable=self.drawdown_var, font=("Microsoft YaHei UI", 12, "bold")).grid(row=0, column=1, padx=8, pady=8, sticky=tk.W)
         ttk.Label(result, text="动作").grid(row=1, column=0, padx=8, pady=8, sticky=tk.W)
         ttk.Label(result, textvariable=self.risk_action_var, font=("Microsoft YaHei UI", 12, "bold")).grid(row=1, column=1, padx=8, pady=8, sticky=tk.W)
+        return page
 
     def _build_review_page(self) -> ttk.Frame:
         page = self._page()
@@ -276,6 +279,7 @@ class LiveExecutionChecklistGui:
         ttk.Label(page, text="复核备注").pack(anchor=tk.W, pady=(12, 4))
         self.run_note_text = tk.Text(page, height=14, wrap=tk.WORD)
         self.run_note_text.pack(fill=tk.BOTH, expand=True)
+        return page
 
     def _build_record_page(self) -> ttk.Frame:
         page = self._page()
@@ -283,6 +287,7 @@ class LiveExecutionChecklistGui:
         ttk.Label(page, text="记录本周实际动作、跳过原因、异常情况。").pack(anchor=tk.W, pady=(4, 8))
         self.action_note_text = tk.Text(page, height=22, wrap=tk.WORD)
         self.action_note_text.pack(fill=tk.BOTH, expand=True)
+        return page
 
     def _build_files_page(self) -> ttk.Frame:
         page = self._page()
@@ -307,6 +312,7 @@ class LiveExecutionChecklistGui:
         ttk.Label(latest, text="最新小资金报告").grid(row=1, column=0, padx=8, pady=8, sticky=tk.W)
         ttk.Entry(latest, textvariable=self.auto_path_vars["small_capital"], width=100).grid(row=1, column=1, sticky=tk.W)
         ttk.Button(latest, text="打开", command=lambda: self.open_path(self.auto_path_vars["small_capital"].get())).grid(row=1, column=2, padx=8)
+        return page
 
     def _restore_text_widgets(self) -> None:
         notes = self.state.get("notes", {})
