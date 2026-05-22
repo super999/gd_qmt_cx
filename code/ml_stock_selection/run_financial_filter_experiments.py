@@ -13,7 +13,7 @@ import pandas as pd
 from config import StrategyConfig
 from portfolio import DailyRebalanceBacktester, PortfolioSelector
 from reporting import MetricsCalculator
-from run_portfolio_experiments import build_buffer_values, parse_float_list, parse_int_list, summarize_daily_nav
+from run_portfolio_experiments import build_buffer_values, describe_portfolio_rule, parse_float_list, parse_int_list, summarize_daily_nav
 from utils import print_title
 
 
@@ -280,10 +280,13 @@ def run_one_experiment(
     filter_daily.to_csv(experiment_dir / "filter_daily.csv", index=False, encoding="utf-8-sig")
 
     summary = summarize_daily_nav(label, run_dir, experiment_name, config, daily_df, selections)
+    filter_cn = FINANCIAL_FILTER_DESCRIPTIONS[filter_name].rstrip("。；; ")
+    rule_cn = "{}；{}".format(filter_cn, describe_portfolio_rule(top_n, frequency, buffer_rank, min_holding_days))
     summary.update(
         {
             "filter_name": filter_name,
             "filter_description": FINANCIAL_FILTER_DESCRIPTIONS[filter_name],
+            "experiment_name_cn": rule_cn,
             **summarize_filter_daily(filter_daily, top_n),
         }
     )
@@ -311,17 +314,18 @@ def build_report(summary_df: pd.DataFrame, output_dir: Path, filter_names: List[
             "",
             "## 汇总排序",
             "",
-            "| source | filter | experiment | return | max_drawdown | avg_turnover | avg_candidates | min_candidates | pass_rate | days_below_top_n |",
-            "| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+            "| source | filter | experiment | 中文说明 | return | max_drawdown | avg_turnover | avg_candidates | min_candidates | pass_rate | days_below_top_n |",
+            "| --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
         ]
     )
     ranked = summary_df.sort_values(["total_return_with_cost", "max_drawdown_with_cost"], ascending=[False, False])
     for _, row in ranked.iterrows():
         lines.append(
-            "| {} | `{}` | {} | {:.2%} | {:.2%} | {:.4f} | {:.1f} | {} | {:.2%} | {} |".format(
+            "| {} | `{}` | {} | {} | {:.2%} | {:.2%} | {:.4f} | {:.1f} | {} | {:.2%} | {} |".format(
                 row["source_label"],
                 row["filter_name"],
                 row["experiment_name"],
+                row.get("experiment_name_cn", ""),
                 row["total_return_with_cost"],
                 row["max_drawdown_with_cost"],
                 row["avg_turnover"],

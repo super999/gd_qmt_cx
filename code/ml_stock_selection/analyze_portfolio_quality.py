@@ -57,7 +57,12 @@ def max_consecutive_negative_months(month_df: pd.DataFrame) -> int:
     return max_streak
 
 
-def summarize_experiment(experiment_dir: Path, source_label: str, experiment_name: str) -> tuple[Dict[str, Any], pd.DataFrame]:
+def summarize_experiment(
+    experiment_dir: Path,
+    source_label: str,
+    experiment_name: str,
+    experiment_name_cn: str = "",
+) -> tuple[Dict[str, Any], pd.DataFrame]:
     daily_path = experiment_dir / source_label / experiment_name / "daily_nav.csv"
     if not daily_path.exists():
         raise FileNotFoundError("未找到 daily_nav.csv: {}".format(daily_path))
@@ -73,6 +78,7 @@ def summarize_experiment(experiment_dir: Path, source_label: str, experiment_nam
     summary = {
         "source_label": source_label,
         "experiment_name": experiment_name,
+        "experiment_name_cn": experiment_name_cn,
         "days": int(len(daily_df)),
         "months": int(len(month_df)),
         "total_return_with_cost": total_return,
@@ -105,14 +111,15 @@ def build_report(summary_df: pd.DataFrame, output_dir: Path) -> str:
         "",
         "## 收益回撤比排序",
         "",
-        "| source | experiment | return | mdd | return/mdd | month_win | worst_month | worst_return | avg_turnover |",
-        "| --- | --- | ---: | ---: | ---: | ---: | --- | ---: | ---: |",
+        "| source | experiment | 中文说明 | return | mdd | return/mdd | month_win | worst_month | worst_return | avg_turnover |",
+        "| --- | --- | --- | ---: | ---: | ---: | ---: | --- | ---: | ---: |",
     ]
     for _, row in ranked.iterrows():
         lines.append(
-            "| {} | {} | {:.2%} | {:.2%} | {:.2f} | {:.2%} | {} | {:.2%} | {:.4f} |".format(
+            "| {} | {} | {} | {:.2%} | {:.2%} | {:.2f} | {:.2%} | {} | {:.2%} | {:.4f} |".format(
                 row["source_label"],
                 row["experiment_name"],
+                row.get("experiment_name_cn", ""),
                 row["total_return_with_cost"],
                 row["max_drawdown_with_cost"],
                 row["return_drawdown_ratio"],
@@ -153,6 +160,7 @@ def main() -> int:
                 experiment_root,
                 str(row["source_label"]),
                 str(row["experiment_name"]),
+                str(row.get("experiment_name_cn", "")),
             )
             summary["experiment_root"] = str(experiment_root)
             summaries.append(summary)

@@ -177,6 +177,7 @@ code/ml_stock_selection/outputs/financial_filter_experiments/<run_id>/
 - `financial_filter_summary.csv`：所有过滤实验汇总。
 - `financial_filter_report.md`：按含成本收益排序的人读报告。
 - 每个实验子目录下保存 `selected_portfolio.csv`、`daily_nav.csv`、`trades.csv`、`filter_daily.csv`、`summary.json`。
+- 汇总 CSV 和 Markdown 报告都会输出 `experiment_name_cn`，用中文解释规则含义。
 
 `days_below_top_n` 用于检查过滤条件是否过窄；如果该值很高，说明很多交易日过滤后的候选数不足目标持仓数。
 

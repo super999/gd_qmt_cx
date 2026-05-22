@@ -48,6 +48,28 @@ def build_buffer_values(top_n: int, multipliers: List[float]) -> List[int]:
     return list(dict.fromkeys(values))
 
 
+def describe_rebalance_frequency(frequency: str) -> str:
+    if frequency == "daily":
+        return "每日调仓"
+    if frequency == "weekly":
+        return "每周第一个可用预测日调仓"
+    return frequency
+
+
+def describe_portfolio_rule(top_n: int, frequency: str, buffer_rank: int, min_holding_days: int) -> str:
+    parts = [
+        "持有 {} 只股票".format(top_n),
+        describe_rebalance_frequency(frequency),
+    ]
+    if buffer_rank > 0:
+        parts.append("旧持仓只要当期排名仍在前 {} 名就优先保留".format(buffer_rank))
+    else:
+        parts.append("无排名缓冲，调仓时严格按当期排名重选")
+    if min_holding_days > 1:
+        parts.append("最少持有 {} 个交易日".format(min_holding_days))
+    return "；".join(parts)
+
+
 def load_run_label(run_dir: Path, fallback: str) -> str:
     summary_path = run_dir / "summary.json"
     if not summary_path.exists():
@@ -82,6 +104,12 @@ def summarize_daily_nav(
         "source_label": label,
         "source_run_dir": str(run_dir),
         "experiment_name": experiment_name,
+        "experiment_name_cn": describe_portfolio_rule(
+            config.top_n,
+            config.rebalance_frequency,
+            config.hold_rank_buffer,
+            config.min_holding_days,
+        ),
         "top_n": config.top_n,
         "rebalance_frequency": config.rebalance_frequency,
         "hold_rank_buffer": config.hold_rank_buffer,
@@ -161,15 +189,16 @@ def build_report(summary_df: pd.DataFrame, output_dir: Path) -> str:
         "",
         "## 汇总排序",
         "",
-        "| source | experiment | return | max_drawdown | avg_turnover | total_cost | win_rate |",
-        "| --- | --- | ---: | ---: | ---: | ---: | ---: |",
+        "| source | experiment | 中文说明 | return | max_drawdown | avg_turnover | total_cost | win_rate |",
+        "| --- | --- | --- | ---: | ---: | ---: | ---: | ---: |",
     ]
     ranked = summary_df.sort_values(["total_return_with_cost", "max_drawdown_with_cost"], ascending=[False, False])
     for _, row in ranked.iterrows():
         lines.append(
-            "| {} | {} | {:.2%} | {:.2%} | {:.4f} | {:.2%} | {:.2%} |".format(
+            "| {} | {} | {} | {:.2%} | {:.2%} | {:.4f} | {:.2%} | {:.2%} |".format(
                 row["source_label"],
                 row["experiment_name"],
+                row.get("experiment_name_cn", ""),
                 row["total_return_with_cost"],
                 row["max_drawdown_with_cost"],
                 row["avg_turnover"],
