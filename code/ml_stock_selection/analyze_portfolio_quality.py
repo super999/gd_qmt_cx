@@ -15,7 +15,7 @@ from utils import print_title
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="分析组合实验的收益质量")
-    parser.add_argument("--experiment-dirs", nargs="+", required=True, help="一个或多个 portfolio_experiments 输出目录")
+    parser.add_argument("--experiment-dirs", nargs="+", required=True, help="一个或多个 portfolio_experiments 或 financial_filter_experiments 输出目录")
     parser.add_argument("--output-dir", default=None, help="输出目录；默认 outputs/portfolio_quality/<run_id>")
     return parser.parse_args()
 
@@ -125,6 +125,17 @@ def build_report(summary_df: pd.DataFrame, output_dir: Path) -> str:
     return "\n".join(lines) + "\n"
 
 
+def load_experiment_matrix(experiment_root: Path) -> pd.DataFrame:
+    candidates = [
+        experiment_root / "experiment_summary.csv",
+        experiment_root / "financial_filter_summary.csv",
+    ]
+    for path in candidates:
+        if path.exists():
+            return pd.read_csv(path, encoding="utf-8-sig")
+    raise FileNotFoundError("未找到实验汇总文件: {}".format(" 或 ".join(str(path) for path in candidates)))
+
+
 def main() -> int:
     args = parse_args()
     output_dir = resolve_output_dir(args.output_dir)
@@ -136,10 +147,7 @@ def main() -> int:
     print("输出目录: {}".format(output_dir))
 
     for experiment_root in [Path(path) for path in args.experiment_dirs]:
-        summary_path = experiment_root / "experiment_summary.csv"
-        if not summary_path.exists():
-            raise FileNotFoundError("未找到 experiment_summary.csv: {}".format(summary_path))
-        matrix = pd.read_csv(summary_path, encoding="utf-8-sig")
+        matrix = load_experiment_matrix(experiment_root)
         for _, row in matrix.iterrows():
             summary, month_df = summarize_experiment(
                 experiment_root,

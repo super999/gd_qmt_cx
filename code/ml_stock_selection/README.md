@@ -28,7 +28,8 @@
 8. `prepare_financial_data.py`：财务数据下载、读取、缓存和覆盖率诊断。
 9. `financial_factors.py`：把公告日口径财务数据转成点时可见因子。
 10. `run_portfolio_experiments.py`：复用已有预测结果，批量测试 TopN、调仓频率和排名缓冲。
-11. `analyze_portfolio_quality.py`：复用组合实验输出，分析月度收益、最差月份和收益回撤比。
+11. `run_financial_filter_experiments.py`：复用已有财务增强预测结果，测试成长、质量和低 PB 代理过滤。
+12. `analyze_portfolio_quality.py`：复用组合实验输出，分析月度收益、最差月份和收益回撤比。
 
 这样拆分后，入口文件只负责启动，不再承载具体业务逻辑。
 
@@ -140,6 +141,50 @@ d:\python_envs\gd_qmt_env\python.exe code/ml_stock_selection/analyze_portfolio_q
 
 `buffer0` 表示没有排名缓冲：每次调仓时只看当期排名，旧持仓没有保留优先权。  
 例如 `top150_weekly_buffer450` 表示每周调仓、目标持有 150 只；旧持仓只要当期排名仍在前 450，就优先保留，再用新高分股票补足 150 只。
+
+## 财务过滤实验
+
+财务因子也可以不只作为 LightGBM 特征，而是在组合构造前先做候选池过滤。这个实验不重训模型，只读取已有财务增强版 `predictions.csv`：
+
+```powershell
+d:\python_envs\gd_qmt_env\python.exe code/ml_stock_selection/run_financial_filter_experiments.py --run-dirs code/ml_stock_selection/outputs/lightgbm_multi_factor_stock_selection/20260521_213451_start20200101_end20260511_pred20200101_all --labels financial_2020
+```
+
+默认过滤器：
+
+- `none`：不过滤，作为同一份预测结果基线。
+- `avoid_bad_financial`：排除成长、ROE 或负债率明显落后的股票。
+- `growth_q50` / `growth_q70`：营收同比和归母净利润同比进入当日截面前 50% / 30%。
+- `quality_q50`：ROE 和销售现金流高于中位数，资产负债率不高于 70% 分位。
+- `growth_quality_q50`：同时满足成长和质量过滤。
+- `bp_value_q50` / `bp_value_q70`：用 `s_fa_bps / close` 作为低 PB 代理，进入当日截面前 50% / 30%。
+- `growth_quality_value_q50`：成长、质量和低 PB 代理同时满足。
+
+默认组合规则是 `Top100/Top150 + weekly + buffer=3xTopN`，可通过参数调整：
+
+```powershell
+d:\python_envs\gd_qmt_env\python.exe code/ml_stock_selection/run_financial_filter_experiments.py --run-dirs <financial_run_dir> --labels financial --top-n-values 100,150 --rebalance-frequency weekly --buffer-multipliers 2,3
+```
+
+输出目录：
+
+```text
+code/ml_stock_selection/outputs/financial_filter_experiments/<run_id>/
+```
+
+主要输出：
+
+- `financial_filter_summary.csv`：所有过滤实验汇总。
+- `financial_filter_report.md`：按含成本收益排序的人读报告。
+- 每个实验子目录下保存 `selected_portfolio.csv`、`daily_nav.csv`、`trades.csv`、`filter_daily.csv`、`summary.json`。
+
+`days_below_top_n` 用于检查过滤条件是否过窄；如果该值很高，说明很多交易日过滤后的候选数不足目标持仓数。
+
+财务过滤实验也可以继续使用收益质量分析脚本：
+
+```powershell
+d:\python_envs\gd_qmt_env\python.exe code/ml_stock_selection/analyze_portfolio_quality.py --experiment-dirs code/ml_stock_selection/outputs/financial_filter_experiments/<run_id>
+```
 
 ## 输出
 
