@@ -31,6 +31,7 @@
 11. `run_financial_filter_experiments.py`：复用已有财务增强预测结果，测试成长、质量和低 PB 代理过滤。
 12. `analyze_portfolio_quality.py`：复用组合实验输出，分析月度收益、最差月份和收益回撤比。
 13. `run_small_capital_experiments.py`：把研究组合转换成小资金、最小买入金额和有限持仓数约束下的近似实盘回测。
+14. `live_execution_checklist_gui.py`：小资金实盘执行清单 GUI，支持导航页面、半自动检查、勾选确认和状态保存。
 
 这样拆分后，入口文件只负责启动，不再承载具体业务逻辑。
 
@@ -209,6 +210,38 @@ code/ml_stock_selection/outputs/small_capital_experiments/<run_id>/
 - 每个实验子目录下保存 `daily_nav.csv`、`holdings.csv`、`trades.csv`、`summary.json`。
 
 注意：当前预测文件没有次日开盘价列，所以该脚本使用信号日 `close` 近似估算买入金额和 100 股整数倍，收益仍使用既有 `realized_next_open_return`。它用于评估小资金仓位约束，不等同于正式撮合回测。
+
+## 小资金实盘执行清单 GUI
+
+打开本地桌面执行清单：
+
+```powershell
+code/ml_stock_selection/start_live_execution_checklist_gui.bat
+```
+
+或直接运行：
+
+```powershell
+d:\python_envs\gd_qmt_env\python.exe code/ml_stock_selection/live_execution_checklist_gui.py
+```
+
+GUI 第一版采用左侧导航：
+
+- `周度准备`：查看本周准备项和检查参数。
+- `自动检查`：一键检查 MiniQMT、本地日线、财务缓存、最新预测目录和小资金报告。
+- `账户与风控`：填写总资产、可用资金和最高权益，自动显示 `-5%/-8%/-10%` 风控提示。
+- `人工复核`：勾选候选股人工检查、现金保留、每周新增数量等。
+- `执行记录`：记录本周实际动作和异常情况。
+- `文件入口`：打开预测目录、财务缓存、小资金报告和执行清单文档。
+
+状态保存位置：
+
+```text
+code/ml_stock_selection/outputs/live_execution_checklist/checklist_state.json
+code/ml_stock_selection/outputs/live_execution_checklist/weekly_checklist_log.csv
+```
+
+该 GUI 只做只读检查和人工确认，不下载数据、不训练模型、不自动下单。
 
 ## 输出
 
