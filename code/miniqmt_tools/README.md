@@ -14,9 +14,14 @@
   - 按指定日期、代码前缀、市场后缀和价格区间筛选股票。
   - 默认会先对目标股票池补下载目标日期历史行情，再读取和筛选。
 - `check_missing_market_data.py`
-  - 全市场单日 Local-First 行情缺失检查，默认扫描 `上证A股` + `深证A股`。
-  - 默认先用 `get_local_data` 检查本地行情，不自动下载。
-  - 如需只下载缺失股票并复查，把脚本顶部的 `DOWNLOAD_MISSING_AFTER_LOCAL_CHECK` 改为 `True`。
+  - 全市场 Local-First 行情缺失检查，默认扫描 A 股全市场（`上证A股` + `深证A股`）。
+  - 默认无参数即可运行：从项目历史基准 `20200101` 到当前可识别最新交易日，自动生成交易日清单，检查并补下载缺失日线。
+  - 默认先用 `get_local_data` 检查本地行情；发现缺失后调用 `download_history_data` 补下载，再复查。
+  - 每只股票会用 `get_instrument_detail` 的 `OpenDate` 作为自己的实际检查起点，上市前日期不会被误判为缺失。
+  - 已确认完整的 `股票 + 交易日` 会写入本地 SQLite 检查缓存：`code/miniqmt_tools/outputs/market_data_check_cache.sqlite`；下次运行自动跳过同一 `股票 + 交易日`，避免反复检查。
+  - 如果补下载后仍缺失，也会以 `missing_after_download` 写入缓存；这代表“已诊断过但本地数据源仍无此日线”，下次不重复下载同一缺口。
+  - 如需完全重查，可加 `--reset-cache`；如需临时绕过缓存，可加 `--no-cache`。
+  - 自动交易日历会优先尝试 `xtdata.get_trading_calendar`，不可用时再尝试 `akshare`、`tushare`，最后回退到参考标的本地日线，默认参考标的是 `510300.SH`。当前 `d:\python_envs\gd_qmt_env` 已安装 `akshare/tushare`；Tushare 如需使用需设置 `TUSHARE_TOKEN`。
   - `fill_data=False` 是缺失检查的固定口径；`fill_data=True` 会用前一条数据填充缺失 K 线，可能掩盖真实缺口。
   - 有行情行时会额外读取 `suspendFlag`；`suspendFlag` 非 0 的股票单独输出为“停牌标记”，不混入缺失清单。
   - 会调用 `get_instrument_detail` 读取 `OpenDate`、`ExpireDate`、`InstrumentStatus`、`IsTrading`，用于识别目标日尚未上市、目标日已退市/到期、当前合约停牌状态。

@@ -4,12 +4,14 @@ r"""
 全市场 Local-First 行情缺失检查。
 
 默认检查范围：
-- 股票池：上证A股 + 深证A股
-- 日期：2026-05-11
+- 股票池：A 股全市场（上证A股 + 深证A股）
+- 日期：从项目历史基准 20200101 到当前可识别最新交易日
 - 周期：1d
 
 运行：
     d:\python_envs\gd_qmt_env\python.exe code/miniqmt_tools/check_missing_market_data.py
+
+默认命令会做全市场自动体检，不需要手工指定日期或板块。
 
 流程：
 1. 先用 get_local_data 读取本地行情，不改变本地数据状态。
@@ -20,8 +22,11 @@ r"""
 
 from __future__ import annotations
 
+import argparse
 import math
+import sqlite3
 import sys
+import time
 import traceback
 from dataclasses import dataclass
 from datetime import datetime
@@ -36,8 +41,9 @@ from xtquant import xtdata
 # 可复用参数区
 # =========================
 
-CHECK_START_DATE = "20260511"
-CHECK_END_DATE = "20260511"
+DEFAULT_HISTORY_START_DATE = "20200101"
+CHECK_START_DATE = DEFAULT_HISTORY_START_DATE
+CHECK_END_DATE = datetime.now().strftime("%Y%m%d")
 
 # 单日检查默认预期日期就是 CHECK_START_DATE；多日检查时可手工列出交易日。
 EXPECTED_DATES: List[str] = []
@@ -62,7 +68,8 @@ FILL_DATA = False
 
 BATCH_SIZE = 300
 DOWNLOAD_PROGRESS_EVERY = 100
-INSTRUMENT_DETAIL_PROGRESS_EVERY = 500
+INSTRUMENT_DETAIL_PROGRESS_EVERY = 100
+INSTRUMENT_DETAIL_SLOW_SECONDS = 2.0
 
 REQUIRED_FIELDS = ["open", "high", "low", "close", "volume", "amount"]
 SUSPEND_FIELD = "suspendFlag"
@@ -99,8 +106,23 @@ PRODUCT_TYPE_LABELS = {
     300: "其他",
 }
 
-# 默认只检查本地数据。改成 True 时，只下载初始检查发现缺失的股票。
-DOWNLOAD_MISSING_AFTER_LOCAL_CHECK = False
+# 脚本配置默认值；运行时可用 --download-missing / --check-only 覆盖。
+DOWNLOAD_MISSING_AFTER_LOCAL_CHECK = True
+
+# 自动用交易日历生成 EXPECTED_DATES。
+CALENDAR_CODE = "510300.SH"
+LOCAL_SCAN_START_DATE = "19900101"
+DOWNLOAD_CALENDAR_DATA = True
+AUTO_CALENDAR = True
+CALENDAR_SOURCE = "auto"
+MIN_EXPECTED_DATE_BY_CODE: Dict[str, str] = {}
+ENABLE_CHECK_CACHE = True
+RESET_CHECK_CACHE = False
+CHECK_CACHE_PATH = OUTPUT_DIR / "market_data_check_cache.sqlite"
+CACHED_OK_DATES_BY_CODE: Dict[str, set] = {}
+CACHED_OK_COUNT_BY_CODE: Dict[str, int] = {}
+CACHE_SKIPPED_CHECK_COUNT = 0
+CONFIRMED_CACHE_STATUSES = ("ok", "missing_after_download")
 
 
 @dataclass
@@ -115,6 +137,10 @@ def print_title(title: str) -> None:
     print("=" * 80)
     print(title)
     print("=" * 80)
+
+
+def log(message: str) -> None:
+    print("[{}] {}".format(datetime.now().strftime("%H:%M:%S"), message), flush=True)
 
 
 def add_status(statuses: List[CheckStatus], name: str, status: str, detail: str = "") -> None:
@@ -290,6 +316,92 @@ def chunked(items: Sequence[str], size: int) -> Iterable[List[str]]:
         yield list(items[start : start + size])
 
 
+def parse_csv_list(value: Optional[str]) -> List[str]:
+    if value is None:
+        return []
+    return [item.strip() for item in value.split(",") if item.strip()]
+
+
+def build_arg_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description="MiniQMT 全市场 Local-First 行情缺失检查与缺失补下载。",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
+    parser.add_argument(
+        "--calendar-source",
+        choices=["auto", "xtdata", "akshare", "tushare", "local"],
+        default=CALENDAR_SOURCE,
+        help="自动交易日历来源；auto 会按 xtdata、akshare、tushare、本地参考标的顺序尝试。",
+    )
+    parser.add_argument(
+        "--calendar-code",
+        default=CALENDAR_CODE,
+        help="自动模式下用于生成交易日清单的参考标的。",
+    )
+    parser.add_argument(
+        "--local-scan-start",
+        default=LOCAL_SCAN_START_DATE,
+        help="自动模式下扫描目标股票本地最后日期的起始日期。",
+    )
+    parser.add_argument(
+        "--no-download-calendar",
+        action="store_true",
+        help="自动模式下不预先下载参考标的日线，仅使用已有本地参考日历。",
+    )
+    parser.add_argument("--batch-size", type=int, default=BATCH_SIZE, help="get_local_data 分批读取数量。")
+    parser.add_argument("--no-cache", action="store_true", help="本次运行不读取/写入本地检查缓存。")
+    parser.add_argument("--reset-cache", action="store_true", help="运行前清空本地检查缓存。")
+
+    download_group = parser.add_mutually_exclusive_group()
+    download_group.add_argument(
+        "--download-missing",
+        dest="download_missing",
+        action="store_true",
+        default=None,
+        help="初始本地检查发现缺失后，调用 download_history_data 补下载。",
+    )
+    download_group.add_argument(
+        "--check-only",
+        dest="download_missing",
+        action="store_false",
+        default=None,
+        help="只检查本地行情，不下载缺失数据。",
+    )
+
+    return parser
+
+
+def apply_cli_args(args: argparse.Namespace) -> None:
+    global CHECK_START_DATE
+    global CHECK_END_DATE
+    global BATCH_SIZE
+    global DOWNLOAD_MISSING_AFTER_LOCAL_CHECK
+    global CHECK_INSTRUMENT_DETAIL
+    global CALENDAR_CODE
+    global LOCAL_SCAN_START_DATE
+    global DOWNLOAD_CALENDAR_DATA
+    global AUTO_CALENDAR
+    global CALENDAR_SOURCE
+    global ENABLE_CHECK_CACHE
+    global RESET_CHECK_CACHE
+
+    CHECK_START_DATE = DEFAULT_HISTORY_START_DATE
+    CHECK_END_DATE = datetime.now().strftime("%Y%m%d")
+    AUTO_CALENDAR = True
+    CHECK_INSTRUMENT_DETAIL = True
+    CALENDAR_SOURCE = str(args.calendar_source).strip().lower()
+    CALENDAR_CODE = str(args.calendar_code).strip()
+    LOCAL_SCAN_START_DATE = normalize_date(args.local_scan_start) or str(args.local_scan_start)
+    DOWNLOAD_CALENDAR_DATA = not bool(args.no_download_calendar)
+    if args.batch_size <= 0:
+        raise RuntimeError("--batch-size 必须大于 0。")
+    BATCH_SIZE = args.batch_size
+    ENABLE_CHECK_CACHE = not bool(args.no_cache)
+    RESET_CHECK_CACHE = bool(args.reset_cache)
+    if args.download_missing is not None:
+        DOWNLOAD_MISSING_AFTER_LOCAL_CHECK = args.download_missing
+
+
 def expected_dates_from_config() -> List[str]:
     if EXPECTED_DATES:
         return sorted(set(EXPECTED_DATES))
@@ -345,9 +457,15 @@ def fetch_instrument_details(codes: List[str], statuses: List[CheckStatus]) -> D
         add_status(statuses, "get_instrument_detail", "SKIP", "CHECK_INSTRUMENT_DETAIL=False")
         return {}
 
+    log("开始读取合约基础信息 get_instrument_detail，总数 {}".format(len(codes)))
     details: Dict[str, Dict[str, Any]] = {}
     failed: List[str] = []
+    start_time = time.perf_counter()
     for index, code in enumerate(codes, start=1):
+        if index == 1 or index % INSTRUMENT_DETAIL_PROGRESS_EVERY == 0 or index > max(len(codes) - 30, 0):
+            log("准备读取合约基础信息: {}/{} code={}".format(index, len(codes), code))
+
+        call_start = time.perf_counter()
         try:
             detail = xtdata.get_instrument_detail(code)
             if isinstance(detail, dict):
@@ -357,8 +475,29 @@ def fetch_instrument_details(codes: List[str], statuses: List[CheckStatus]) -> D
         except Exception:
             failed.append(code)
 
+        elapsed = time.perf_counter() - call_start
+        if elapsed >= INSTRUMENT_DETAIL_SLOW_SECONDS:
+            log("get_instrument_detail 慢调用: {} 用时 {:.2f}s，进度 {}/{}".format(code, elapsed, index, len(codes)))
+
         if INSTRUMENT_DETAIL_PROGRESS_EVERY > 0 and index % INSTRUMENT_DETAIL_PROGRESS_EVERY == 0:
-            print("读取合约基础信息: {}/{}".format(index, len(codes)))
+            total_elapsed = time.perf_counter() - start_time
+            log(
+                "读取合约基础信息: {}/{}，成功 {}，失败 {}，累计 {:.1f}s".format(
+                    index,
+                    len(codes),
+                    len(details),
+                    len(failed),
+                    total_elapsed,
+                )
+            )
+
+    log(
+        "完成读取合约基础信息: 成功 {}，失败 {}，总用时 {:.1f}s".format(
+            len(details),
+            len(failed),
+            time.perf_counter() - start_time,
+        )
+    )
 
     if failed:
         add_status(
@@ -399,10 +538,478 @@ def fetch_local_batch(codes: List[str], statuses: List[CheckStatus], label: str)
 
 def fetch_local_data(codes: List[str], statuses: List[CheckStatus], label: str) -> Dict[str, pd.DataFrame]:
     all_data: Dict[str, pd.DataFrame] = {}
+    total_batches = math.ceil(len(codes) / BATCH_SIZE) if codes else 0
+    start_time = time.perf_counter()
+    log("{}开始读取本地行情，总标的 {}，批次数 {}".format(label, len(codes), total_batches))
     for batch_index, batch_codes in enumerate(chunked(codes, BATCH_SIZE), start=1):
-        print("{}读取本地行情批次 {}: {} 个标的".format(label, batch_index, len(batch_codes)))
+        log("{}读取本地行情批次 {}/{}: {} 个标的".format(label, batch_index, total_batches, len(batch_codes)))
         all_data.update(fetch_local_batch(batch_codes, statuses, label))
+    log("{}完成读取本地行情，返回 {} 个键，总用时 {:.1f}s".format(label, len(all_data), time.perf_counter() - start_time))
     return all_data
+
+
+def fetch_local_range(
+    codes: List[str],
+    start_date: str,
+    end_date: str,
+    statuses: List[CheckStatus],
+    label: str,
+) -> Dict[str, pd.DataFrame]:
+    try:
+        data = xtdata.get_local_data(
+            field_list=[],
+            stock_list=codes,
+            period=PERIOD,
+            start_time=start_date,
+            end_time=end_date,
+            count=-1,
+            dividend_type=DIVIDEND_TYPE,
+            fill_data=FILL_DATA,
+        )
+        add_status(
+            statuses,
+            "get_local_data",
+            "OK",
+            "{}: {} 至 {}, 请求 {} 个标的，返回 {} 个键".format(label, start_date, end_date, len(codes), len(data)),
+        )
+        return data
+    except Exception as exc:
+        add_status(statuses, "get_local_data", "ERROR", "{}: {}".format(label, format_exception(exc)))
+        raise
+
+
+def frame_dates(frame: Optional[pd.DataFrame]) -> List[str]:
+    if not isinstance(frame, pd.DataFrame) or frame.empty:
+        return []
+    dates = [date for date in (normalize_date(index) for index in frame.index) if date]
+    return sorted(set(dates))
+
+
+def frame_date_position_map(frame: Optional[pd.DataFrame]) -> Dict[str, int]:
+    if not isinstance(frame, pd.DataFrame) or frame.empty:
+        return {}
+    mapping: Dict[str, int] = {}
+    for pos, index in enumerate(frame.index):
+        date = normalize_date(index)
+        if date:
+            mapping[date] = pos
+    return mapping
+
+
+def next_yyyymmdd(date: str) -> str:
+    return (pd.Timestamp(datetime.strptime(date, "%Y%m%d")) + pd.Timedelta(days=1)).strftime("%Y%m%d")
+
+
+def calendar_from_xtdata(start_date: str, end_date: str, statuses: List[CheckStatus]) -> List[str]:
+    dates: List[str] = []
+    errors: List[str] = []
+    for market in ["SH", "SZ"]:
+        try:
+            raw_dates = xtdata.get_trading_calendar(market, start_date, end_date)
+            market_dates = [date for date in (normalize_date(item) for item in raw_dates) if date]
+            dates.extend(market_dates)
+            add_status(statuses, "get_trading_calendar", "OK", "{}: {} 个交易日".format(market, len(market_dates)))
+        except Exception as exc:
+            errors.append("{}: {}".format(market, format_exception(exc)))
+    if dates:
+        return sorted(set(dates))
+    add_status(statuses, "get_trading_calendar", "WARN", "; ".join(errors[:2]))
+    return []
+
+
+def calendar_from_akshare(start_date: str, end_date: str, statuses: List[CheckStatus]) -> List[str]:
+    try:
+        import akshare as ak  # type: ignore
+    except Exception as exc:
+        add_status(statuses, "akshare_calendar", "SKIP", "未安装或不可导入: {}".format(format_exception(exc)))
+        return []
+
+    try:
+        frame = ak.tool_trade_date_hist_sina()
+        if "trade_date" not in frame.columns:
+            add_status(statuses, "akshare_calendar", "WARN", "返回结果缺少 trade_date 字段")
+            return []
+        dates = [date for date in (normalize_date(item) for item in frame["trade_date"]) if date]
+        filtered = [date for date in dates if start_date <= date <= end_date]
+        add_status(statuses, "akshare_calendar", "OK", "{} 个交易日".format(len(filtered)))
+        return sorted(set(filtered))
+    except Exception as exc:
+        add_status(statuses, "akshare_calendar", "WARN", format_exception(exc))
+        return []
+
+
+def calendar_from_tushare(start_date: str, end_date: str, statuses: List[CheckStatus]) -> List[str]:
+    try:
+        import os
+        import tushare as ts  # type: ignore
+    except Exception as exc:
+        add_status(statuses, "tushare_calendar", "SKIP", "未安装或不可导入: {}".format(format_exception(exc)))
+        return []
+
+    token = os.environ.get("TUSHARE_TOKEN", "").strip()
+    if not token:
+        add_status(statuses, "tushare_calendar", "SKIP", "未设置 TUSHARE_TOKEN 环境变量")
+        return []
+
+    try:
+        ts.set_token(token)
+        pro = ts.pro_api()
+        frame = pro.trade_cal(exchange="", start_date=start_date, end_date=end_date, is_open="1")
+        if "cal_date" not in frame.columns:
+            add_status(statuses, "tushare_calendar", "WARN", "返回结果缺少 cal_date 字段")
+            return []
+        dates = [date for date in (normalize_date(item) for item in frame["cal_date"]) if date]
+        add_status(statuses, "tushare_calendar", "OK", "{} 个交易日".format(len(dates)))
+        return sorted(set(dates))
+    except Exception as exc:
+        add_status(statuses, "tushare_calendar", "WARN", format_exception(exc))
+        return []
+
+
+def calendar_from_local_reference(start_date: str, end_date: str, statuses: List[CheckStatus]) -> List[str]:
+    if DOWNLOAD_CALENDAR_DATA:
+        try:
+            xtdata.download_history_data(
+                CALENDAR_CODE,
+                period=PERIOD,
+                start_time=start_date,
+                end_time=end_date,
+                incrementally=True,
+            )
+            add_status(statuses, "calendar_reference_download", "OK", "{} {} 至 {}".format(CALENDAR_CODE, start_date, end_date))
+        except Exception as exc:
+            add_status(statuses, "calendar_reference_download", "WARN", format_exception(exc))
+
+    data = fetch_local_range([CALENDAR_CODE], start_date, end_date, statuses, "参考交易日")
+    dates = [date for date in frame_dates(data.get(CALENDAR_CODE)) if start_date <= date <= end_date]
+    if dates:
+        add_status(statuses, "local_reference_calendar", "OK", "{}: {} 个交易日".format(CALENDAR_CODE, len(dates)))
+    else:
+        add_status(statuses, "local_reference_calendar", "WARN", "{} 无可用本地日线".format(CALENDAR_CODE))
+    return dates
+
+
+def resolve_trading_dates(start_date: str, end_date: str, statuses: List[CheckStatus]) -> List[str]:
+    sources = [CALENDAR_SOURCE]
+    if CALENDAR_SOURCE == "auto":
+        sources = ["xtdata", "akshare", "tushare", "local"]
+
+    for source in sources:
+        log("尝试生成交易日历: source={}，{} 至 {}".format(source, start_date, end_date))
+        if source == "xtdata":
+            dates = calendar_from_xtdata(start_date, end_date, statuses)
+        elif source == "akshare":
+            dates = calendar_from_akshare(start_date, end_date, statuses)
+        elif source == "tushare":
+            dates = calendar_from_tushare(start_date, end_date, statuses)
+        elif source == "local":
+            dates = calendar_from_local_reference(start_date, end_date, statuses)
+        else:
+            dates = []
+
+        dates = sorted(set(date for date in dates if start_date <= date <= end_date))
+        if dates:
+            log("交易日历生成成功: source={}，交易日 {} 个，首日 {}，末日 {}".format(source, len(dates), dates[0], dates[-1]))
+            add_status(statuses, "trading_calendar", "OK", "{} 来源生成 {} 个交易日".format(source, len(dates)))
+            return dates
+        log("交易日历来源不可用或为空: source={}".format(source))
+
+    raise RuntimeError("无法生成交易日清单：MiniQMT/akshare/tushare/本地参考标的均不可用。")
+
+
+def apply_auto_expected_dates(codes: List[str], statuses: List[CheckStatus]) -> List[str]:
+    global EXPECTED_DATES
+
+    EXPECTED_DATES = resolve_trading_dates(CHECK_START_DATE, CHECK_END_DATE, statuses)
+    return EXPECTED_DATES
+
+
+def apply_listing_date_floor(
+    codes: List[str],
+    details_by_code: Dict[str, Dict[str, Any]],
+    expected_dates: List[str],
+) -> None:
+    if not expected_dates:
+        return
+
+    log("开始按 OpenDate 计算每只股票实际检查起点")
+    first_expected_date = expected_dates[0]
+    adjusted_count = 0
+    for code in codes:
+        detail = details_by_code.get(code)
+        if not isinstance(detail, dict):
+            continue
+        open_date = int_date_or_none(detail.get("OpenDate"), set(OPEN_DATE_SPECIAL_VALUES))
+        if not open_date:
+            continue
+
+        open_date_text = str(open_date)
+        if open_date_text > first_expected_date:
+            current_floor = MIN_EXPECTED_DATE_BY_CODE.get(code)
+            if not current_floor or open_date_text > current_floor:
+                MIN_EXPECTED_DATE_BY_CODE[code] = open_date_text
+                adjusted_count += 1
+    log("完成 OpenDate 起点处理: 调整 {} 只股票".format(adjusted_count))
+
+
+def expected_dates_for_code(code: str, expected_dates: List[str]) -> List[str]:
+    min_date = MIN_EXPECTED_DATE_BY_CODE.get(code)
+    if not min_date:
+        return expected_dates
+    return [date for date in expected_dates if date >= min_date]
+
+
+def init_check_cache(statuses: List[CheckStatus]) -> None:
+    if not ENABLE_CHECK_CACHE:
+        add_status(statuses, "check_cache", "SKIP", "--no-cache")
+        return
+
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    log("初始化检查缓存: {}".format(CHECK_CACHE_PATH))
+    with sqlite3.connect(CHECK_CACHE_PATH) as conn:
+        if RESET_CHECK_CACHE:
+            log("清空检查缓存表")
+            conn.execute("DROP TABLE IF EXISTS checked_daily_data")
+            add_status(statuses, "check_cache", "OK", "已清空缓存: {}".format(CHECK_CACHE_PATH))
+
+        log("确保检查缓存表存在")
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS checked_daily_data (
+                code TEXT NOT NULL,
+                trade_date TEXT NOT NULL,
+                period TEXT NOT NULL,
+                dividend_type TEXT NOT NULL,
+                status TEXT NOT NULL,
+                checked_at TEXT NOT NULL,
+                source TEXT NOT NULL,
+                PRIMARY KEY (code, trade_date, period, dividend_type)
+            )
+            """
+        )
+        log("确保检查缓存索引 idx_checked_daily_status_date 存在")
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_checked_daily_status_date "
+            "ON checked_daily_data(status, trade_date)"
+        )
+        log("确保检查缓存索引 idx_checked_daily_code_status_period_date 存在")
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_checked_daily_code_status_period_date "
+            "ON checked_daily_data(code, status, period, dividend_type, trade_date)"
+        )
+    log("检查缓存初始化完成")
+    add_status(statuses, "check_cache", "OK", "缓存路径: {}".format(CHECK_CACHE_PATH))
+
+
+def load_cached_ok_counts(codes: List[str], expected_dates: List[str], statuses: List[CheckStatus]) -> None:
+    global CACHED_OK_COUNT_BY_CODE
+
+    CACHED_OK_COUNT_BY_CODE = {}
+    if not ENABLE_CHECK_CACHE or not codes or not expected_dates or not CHECK_CACHE_PATH.exists():
+        return
+
+    min_date = min(expected_dates)
+    max_date = max(expected_dates)
+    total_rows = 0
+    total_batches = math.ceil(len(codes) / 500)
+    log("开始读取检查缓存计数，缓存文件 {} MB，批次数 {}".format(round(CHECK_CACHE_PATH.stat().st_size / 1024 / 1024, 1), total_batches))
+    with sqlite3.connect(CHECK_CACHE_PATH) as conn:
+        for batch_index, batch_codes in enumerate(chunked(codes, 500), start=1):
+            log("读取检查缓存计数批次 {}/{}: {} 个标的".format(batch_index, total_batches, len(batch_codes)))
+            placeholders = ",".join("?" for _ in batch_codes)
+            status_placeholders = ",".join("?" for _ in CONFIRMED_CACHE_STATUSES)
+            params = (
+                list(CONFIRMED_CACHE_STATUSES)
+                + [PERIOD, DIVIDEND_TYPE, min_date, max_date]
+                + batch_codes
+            )
+            rows = conn.execute(
+                """
+                SELECT code, COUNT(*)
+                FROM checked_daily_data
+                WHERE status IN ({})
+                  AND period = ?
+                  AND dividend_type = ?
+                  AND trade_date BETWEEN ? AND ?
+                  AND code IN ({})
+                GROUP BY code
+                """.format(status_placeholders, placeholders),
+                params,
+            ).fetchall()
+            for code, count in rows:
+                count_int = int(count)
+                CACHED_OK_COUNT_BY_CODE[str(code)] = count_int
+                total_rows += count_int
+
+    log("完成读取检查缓存计数: 已确认 code/date {}".format(total_rows))
+    add_status(statuses, "check_cache", "OK", "命中已确认 code/date 计数: {}".format(total_rows))
+
+
+def load_cached_ok_dates(codes: List[str], expected_dates: List[str], statuses: List[CheckStatus]) -> None:
+    global CACHED_OK_DATES_BY_CODE
+
+    CACHED_OK_DATES_BY_CODE = {}
+    if not ENABLE_CHECK_CACHE or not codes or not expected_dates or not CHECK_CACHE_PATH.exists():
+        return
+
+    min_date = min(expected_dates)
+    max_date = max(expected_dates)
+    total_rows = 0
+    total_batches = math.ceil(len(codes) / 500)
+    log("开始读取本轮需检查股票的缓存明细日期，股票 {}，批次数 {}".format(len(codes), total_batches))
+    with sqlite3.connect(CHECK_CACHE_PATH) as conn:
+        for batch_index, batch_codes in enumerate(chunked(codes, 500), start=1):
+            log("读取缓存明细日期批次 {}/{}: {} 个标的".format(batch_index, total_batches, len(batch_codes)))
+            placeholders = ",".join("?" for _ in batch_codes)
+            status_placeholders = ",".join("?" for _ in CONFIRMED_CACHE_STATUSES)
+            params = (
+                list(CONFIRMED_CACHE_STATUSES)
+                + [PERIOD, DIVIDEND_TYPE, min_date, max_date]
+                + batch_codes
+            )
+            rows = conn.execute(
+                """
+                SELECT code, trade_date
+                FROM checked_daily_data
+                WHERE status IN ({})
+                  AND period = ?
+                  AND dividend_type = ?
+                  AND trade_date BETWEEN ? AND ?
+                  AND code IN ({})
+                """.format(status_placeholders, placeholders),
+                params,
+            ).fetchall()
+            total_rows += len(rows)
+            for code, trade_date in rows:
+                CACHED_OK_DATES_BY_CODE.setdefault(str(code), set()).add(str(trade_date))
+
+    log("完成读取缓存明细日期: {}".format(total_rows))
+    add_status(statuses, "check_cache", "OK", "命中已确认 code/date 明细: {}".format(total_rows))
+
+
+def filter_codes_with_unchecked_dates(
+    codes: List[str],
+    expected_dates: List[str],
+    statuses: List[CheckStatus],
+) -> List[str]:
+    global CACHE_SKIPPED_CHECK_COUNT
+
+    CACHE_SKIPPED_CHECK_COUNT = 0
+    active_codes: List[str] = []
+    total_pairs = 0
+    log("开始计算缓存命中，股票 {}，交易日 {}".format(len(codes), len(expected_dates)))
+    for code in codes:
+        code_dates = expected_dates_for_code(code, expected_dates)
+        total_pairs += len(code_dates)
+        cached_count = min(CACHED_OK_COUNT_BY_CODE.get(code, 0), len(code_dates))
+        CACHE_SKIPPED_CHECK_COUNT += cached_count
+        if cached_count < len(code_dates):
+            active_codes.append(code)
+
+    add_status(
+        statuses,
+        "check_cache",
+        "OK",
+        "应检查 code/date {}，缓存跳过 {}，本轮需检查股票 {}".format(
+            total_pairs,
+            CACHE_SKIPPED_CHECK_COUNT,
+            len(active_codes),
+        ),
+    )
+    log(
+        "完成缓存命中计算: 应检查 code/date {}，缓存跳过 {}，本轮需检查股票 {}".format(
+            total_pairs,
+            CACHE_SKIPPED_CHECK_COUNT,
+            len(active_codes),
+        )
+    )
+    return active_codes
+
+
+def record_successful_checks(
+    codes: List[str],
+    data_by_code: Dict[str, pd.DataFrame],
+    expected_dates: List[str],
+    missing_records: List[Dict[str, Any]],
+    statuses: List[CheckStatus],
+    source: str,
+) -> None:
+    if not ENABLE_CHECK_CACHE or not codes or not expected_dates:
+        return
+
+    missing_keys = {(record["code"], record["date"]) for record in missing_records}
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    rows: List[Tuple[str, str, str, str, str, str, str]] = []
+    for index, code in enumerate(codes, start=1):
+        if index % 500 == 0:
+            print("{} 缓存写入准备进度: {}/{}".format(source, index, len(codes)))
+
+        frame = data_by_code.get(code)
+        if not isinstance(frame, pd.DataFrame) or frame.empty:
+            continue
+        cached_dates = CACHED_OK_DATES_BY_CODE.get(code, set())
+        date_pos = frame_date_position_map(frame)
+        for date in expected_dates_for_code(code, expected_dates):
+            if date in cached_dates or (code, date) in missing_keys:
+                continue
+            pos = date_pos.get(date)
+            if pos is None:
+                continue
+            row = frame.iloc[pos]
+            missing_fields = [field for field in REQUIRED_FIELDS if field not in row.index or is_missing_value(row.get(field))]
+            if missing_fields:
+                continue
+            rows.append((code, date, PERIOD, DIVIDEND_TYPE, "ok", now, source))
+
+    if not rows:
+        add_status(statuses, "check_cache", "SKIP", "{} 无新增成功检查记录".format(source))
+        return
+
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    with sqlite3.connect(CHECK_CACHE_PATH) as conn:
+        conn.executemany(
+            """
+            INSERT OR REPLACE INTO checked_daily_data
+                (code, trade_date, period, dividend_type, status, checked_at, source)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            rows,
+        )
+    add_status(statuses, "check_cache", "OK", "{} 写入成功检查记录 {} 条".format(source, len(rows)))
+
+
+def record_persistent_missing_checks(
+    missing_records: List[Dict[str, Any]],
+    statuses: List[CheckStatus],
+    source: str,
+) -> None:
+    if not ENABLE_CHECK_CACHE or not missing_records:
+        return
+
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    rows = [
+        (
+            record["code"],
+            record["date"],
+            PERIOD,
+            DIVIDEND_TYPE,
+            "missing_after_download",
+            now,
+            source,
+        )
+        for record in missing_records
+    ]
+
+    with sqlite3.connect(CHECK_CACHE_PATH) as conn:
+        conn.executemany(
+            """
+            INSERT OR REPLACE INTO checked_daily_data
+                (code, trade_date, period, dividend_type, status, checked_at, source)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            rows,
+        )
+    add_status(statuses, "check_cache", "OK", "{} 写入下载后仍缺失记录 {} 条".format(source, len(rows)))
 
 
 def row_by_date(frame: pd.DataFrame, date: str) -> Optional[pd.Series]:
@@ -422,10 +1029,20 @@ def collect_missing_records(
 ) -> List[Dict[str, Any]]:
     records: List[Dict[str, Any]] = []
 
-    for code in codes:
+    for index, code in enumerate(codes, start=1):
+        if index % 500 == 0:
+            print("缺失比对进度: {}/{}".format(index, len(codes)))
+
         frame = data_by_code.get(code)
+        code_expected_dates = expected_dates_for_code(code, expected_dates)
+        cached_dates = CACHED_OK_DATES_BY_CODE.get(code, set())
+        if cached_dates:
+            code_expected_dates = [date for date in code_expected_dates if date not in cached_dates]
+        if not code_expected_dates:
+            continue
+
         if not isinstance(frame, pd.DataFrame) or frame.empty:
-            for date in expected_dates:
+            for date in code_expected_dates:
                 records.append(
                     {
                         "code": code,
@@ -438,9 +1055,10 @@ def collect_missing_records(
                 )
             continue
 
-        for date in expected_dates:
-            row = row_by_date(frame, date)
-            if row is None:
+        date_pos = frame_date_position_map(frame)
+        available_dates = set(date_pos)
+        for date in code_expected_dates:
+            if date not in available_dates:
                 records.append(
                     {
                         "code": code,
@@ -453,6 +1071,7 @@ def collect_missing_records(
                 )
                 continue
 
+            row = frame.iloc[date_pos[date]]
             missing_fields = [field for field in REQUIRED_FIELDS if field not in row.index or is_missing_value(row.get(field))]
             if missing_fields:
                 records.append(
@@ -562,18 +1181,29 @@ def collect_suspended_records(
     records: List[Dict[str, Any]] = []
     missing_keys = {(record["code"], record["date"]) for record in missing_records}
 
-    for code in codes:
+    for index, code in enumerate(codes, start=1):
+        if index % 500 == 0:
+            print("停牌标记比对进度: {}/{}".format(index, len(codes)))
+
         frame = data_by_code.get(code)
         if not isinstance(frame, pd.DataFrame) or frame.empty:
             continue
+        cached_dates = CACHED_OK_DATES_BY_CODE.get(code, set())
+        code_expected_dates = expected_dates_for_code(code, expected_dates)
+        if cached_dates:
+            code_expected_dates = [date for date in code_expected_dates if date not in cached_dates]
+        if not code_expected_dates:
+            continue
+        date_pos = frame_date_position_map(frame)
 
-        for date in expected_dates:
+        for date in code_expected_dates:
             if (code, date) in missing_keys:
                 continue
 
-            row = row_by_date(frame, date)
-            if row is None:
+            pos = date_pos.get(date)
+            if pos is None:
                 continue
+            row = frame.iloc[pos]
 
             flag = suspend_flag_value(row)
             if flag is None or flag == 0:
@@ -779,7 +1409,11 @@ def write_summary_report(
         "",
         "- 检查时间：{}".format(datetime.now().strftime("%Y-%m-%d %H:%M:%S")),
         "- 日期范围：{} 至 {}".format(CHECK_START_DATE, CHECK_END_DATE),
-        "- 目标板块：{}".format(", ".join(TARGET_SECTORS)),
+        "- 股票池：A股全市场（上证A股 + 深证A股）",
+        "- 自动交易日历：{}".format(AUTO_CALENDAR),
+        "- 交易日历来源：{}".format(CALENDAR_SOURCE),
+        "- 检查缓存：{}".format("启用，路径 {}".format(CHECK_CACHE_PATH) if ENABLE_CHECK_CACHE else "关闭"),
+        "- 缓存跳过 code/date：{}".format(CACHE_SKIPPED_CHECK_COUNT),
         "- 周期：{}".format(PERIOD),
         "- 复权：{}".format(DIVIDEND_TYPE),
         "- fill_data：{}（缺失检查固定为 False，避免填充数据掩盖缺口）".format(FILL_DATA),
@@ -840,6 +1474,7 @@ def write_summary_report(
 def print_summary(title: str, summary: Dict[str, Any]) -> None:
     print_title(title)
     print("预期日期: {}".format(", ".join(summary["expected_dates"])))
+    print("缓存跳过 code/date: {}".format(CACHE_SKIPPED_CHECK_COUNT))
     print("总股票数: {}".format(summary["stock_count"]))
     print("已取到行情股票数: {}".format(summary["available_code_count"]))
     print("其中停牌标记股票数: {}".format(summary["suspended_code_count"]))
@@ -929,39 +1564,78 @@ def print_status_summary(statuses: List[CheckStatus]) -> None:
 
 
 def main() -> int:
+    try:
+        apply_cli_args(build_arg_parser().parse_args())
+    except SystemExit:
+        raise
+    except Exception as exc:
+        print_title("参数错误")
+        print(format_exception(exc))
+        return 2
+
     statuses: List[CheckStatus] = []
     print_title("MiniQMT 全市场 Local-First 行情缺失检查")
     print("Python: {}".format(sys.executable))
-    print("日期范围: {} 至 {}".format(CHECK_START_DATE, CHECK_END_DATE))
-    print("目标板块: {}".format(", ".join(TARGET_SECTORS)))
+    print("检查模式: A股全市场自动体检")
+    print("历史基准: {}".format(CHECK_START_DATE))
+    print("结束上限: {}".format(CHECK_END_DATE))
+    print("股票池: A股全市场（上证A股 + 深证A股）")
     print("读取接口: get_local_data")
     print("周期: {}".format(PERIOD))
     print("fill_data: {}（缺失检查固定用 False）".format(FILL_DATA))
     print("合约基础信息检查: {}".format(CHECK_INSTRUMENT_DETAIL))
     print("缺失后下载: {}".format(DOWNLOAD_MISSING_AFTER_LOCAL_CHECK))
+    print("自动交易日历: {}".format(AUTO_CALENDAR))
+    print("检查缓存: {}".format("启用" if ENABLE_CHECK_CACHE else "关闭"))
+    print("上市日期处理: 强制读取 get_instrument_detail，用 OpenDate 跳过上市前日期。")
 
     try:
-        expected_dates = expected_dates_from_config()
+        log("阶段 1/9: 初始化检查缓存")
+        init_check_cache(statuses)
+        log("阶段 2/9: 获取全市场股票池")
         codes, code_source = get_stock_pool(statuses)
         print("股票池数量: {}".format(len(codes)))
         if not codes:
-            raise RuntimeError("股票池为空，请检查 TARGET_SECTORS/CODE_PREFIXES/MARKET_SUFFIXES。")
+            raise RuntimeError("股票池为空，请检查 TARGET_SECTORS/MARKET_SUFFIXES。")
 
+        log("阶段 3/9: 生成交易日历")
+        expected_dates = apply_auto_expected_dates(codes, statuses)
+        if not expected_dates:
+            print("没有需要检查的预期交易日。")
+            print_status_summary(statuses)
+            return 0
+
+        log("阶段 4/9: 读取合约基础信息")
         details_by_code = fetch_instrument_details(codes, statuses)
-        instrument_status_records = collect_instrument_status_records(codes, code_source, details_by_code, expected_dates)
+        log("阶段 5/9: 根据 OpenDate 调整每只股票检查起点")
+        apply_listing_date_floor(codes, details_by_code, expected_dates)
+        log("阶段 6/9: 读取检查缓存并筛选本轮需检查股票")
+        load_cached_ok_counts(codes, expected_dates, statuses)
+        active_codes = filter_codes_with_unchecked_dates(codes, expected_dates, statuses)
+        if not active_codes:
+            print("缓存显示所有目标 code/date 都已经确认过，本轮无需重复检查。")
+            print_status_summary(statuses)
+            return 0
+        load_cached_ok_dates(active_codes, expected_dates, statuses)
+
+        log("阶段 7/9: 生成合约状态诊断文件")
+        instrument_status_records = collect_instrument_status_records(active_codes, code_source, details_by_code, expected_dates)
         instrument_status_csv = write_instrument_status_csv(instrument_status_records, "instrument_status_initial")
 
-        all_data = fetch_local_data(codes, statuses, "初始")
-        initial_records = collect_missing_records(codes, code_source, all_data, expected_dates)
+        log("阶段 8/9: 读取本地行情并比对缺失")
+        all_data = fetch_local_data(active_codes, statuses, "初始")
+        initial_records = collect_missing_records(active_codes, code_source, all_data, expected_dates)
         initial_suspended_records = collect_suspended_records(
-            codes,
+            active_codes,
             code_source,
             all_data,
             expected_dates,
             initial_records,
         )
+        log("阶段 9/9: 写入检查缓存和输出报告")
+        record_successful_checks(active_codes, all_data, expected_dates, initial_records, statuses, "initial_check")
         initial_summary = summarize(
-            codes,
+            active_codes,
             initial_records,
             initial_suspended_records,
             instrument_status_records,
@@ -984,6 +1658,7 @@ def main() -> int:
         missing_codes = download_missing_codes(initial_records, statuses)
 
         if DOWNLOAD_MISSING_AFTER_LOCAL_CHECK and missing_codes:
+            log("开始补下载缺失股票并复查，缺失股票数 {}".format(len(missing_codes)))
             retry_data = fetch_local_data(missing_codes, statuses, "下载后复查")
             after_records = collect_missing_records(missing_codes, code_source, retry_data, expected_dates)
             after_suspended_records = collect_suspended_records(
@@ -996,6 +1671,8 @@ def main() -> int:
             after_status_records = [
                 record for record in instrument_status_records if record["code"] in set(missing_codes)
             ]
+            record_successful_checks(missing_codes, retry_data, expected_dates, after_records, statuses, "after_download")
+            record_persistent_missing_checks(after_records, statuses, "after_download")
             after_download_summary = summarize(
                 missing_codes,
                 after_records,

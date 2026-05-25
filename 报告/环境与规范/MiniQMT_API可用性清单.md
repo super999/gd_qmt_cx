@@ -184,7 +184,7 @@
 | `xtdata.get_financial_data` | `可用` | `code/miniqmt_tools/财务接口/verify_financial_data_api.py` 实测 | `code/miniqmt_tools/财务接口/verify_financial_data_api.py` | 2026-05-16 对 `000001.SZ`、`600519.SH` 的 `Balance/Income/CashFlow`，`report_time` 与 `announce_time` 均能正常返回数据。 | 回测中若需要点时可见口径，应优先使用 `announce_time`。详细见 `报告/环境与规范/MiniQMT_财务数据接口验证记录.md`。 |
 | `xtdata.get_divid_factors` | `可用` | `code/run_xtquant/test_xtquant_api_matrix.py` 第二轮实测 | `code/run_xtquant/test_xtquant_api_matrix.py` | 2026-04-22 实测接口可调用，返回类型为 `DataFrame`，但在 `600519.SH`、`20200101-20260422` 条件下结果为空。 | 这说明接口本身没有报错；后续若你要做复权核验，需要换更多标的或时间区间继续验证数据覆盖情况。 |
 | `xtdata.get_holidays` | `可用` | `code/run_xtquant/test_xtquant_api_matrix.py` 第二轮实测 | `code/run_xtquant/test_xtquant_api_matrix.py` | 2026-04-22 实测接口可调用，但当前返回空列表。 | 空列表不等于接口不可用，更像当前客户端未预置或未下载节假日数据。 |
-| `xtdata.get_trading_calendar` | `不可用` | `code/run_xtquant/test_xtquant_api_matrix.py` 第二轮实测 | `code/run_xtquant/test_xtquant_api_matrix.py` | 2026-04-22 实测直接抛出 `RuntimeError`，提示“当前客户端未支持此功能，请更新客户端或升级投研版”，底层错误为 `function not realize`。 | 对策略/回测是关键缺口。短期内可先用外部交易日历替代，或尝试升级客户端后再测。 |
+| `xtdata.get_trading_calendar` | `不可用` | `code/run_xtquant/test_xtquant_api_matrix.py` 第二轮实测；2026-05-25 命令行复测 | `code/run_xtquant/test_xtquant_api_matrix.py` | 2026-04-22 实测直接抛出 `RuntimeError`，提示“当前客户端未支持此功能，请更新客户端或升级投研版”，底层错误为 `function not realize`。2026-05-25 在已开通 Level2 后复测 `SH/SZ` 仍返回同类 `function not realize`。 | 对策略/回测是关键缺口。当前仍不能作为主依赖；可优先尝试外部交易日历，或用高流动参考标的本地日线作为回退。 |
 | `xtdata.get_period_list` | `不可用` | `code/run_xtquant/test_xtquant_api_matrix.py` 第二轮实测 | `code/run_xtquant/test_xtquant_api_matrix.py` | 2026-04-22 实测直接抛出 `RuntimeError`，提示当前客户端未支持该功能。 | 这说明不能依赖它动态探测周期列表，短期内只能按文档和实测周期手工维护。 |
 
 ## 交易接口
