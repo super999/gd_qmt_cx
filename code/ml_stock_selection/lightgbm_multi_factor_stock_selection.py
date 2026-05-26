@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import argparse
 import traceback
+from datetime import datetime
 from pathlib import Path
 
 try:
@@ -29,13 +30,16 @@ except Exception as exc:  # pragma: no cover - explicit runtime guard
 from config import StrategyConfig
 from pipeline import ResearchPipeline
 from reporting import MetricsCalculator
-from utils import print_title
+from utils import normalize_date, print_title
+
+
+REFERENCE_DAILY_CODE = "510300.SH"
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="A股全市场 LightGBM 多因子选股离线研究 v1")
     parser.add_argument("--start-date", default="20230101")
-    parser.add_argument("--end-date", default="20260511")
+    parser.add_argument("--end-date", default=None, help="数据结束日；不填时自动使用本地日线已有的最新交易日")
     parser.add_argument("--max-stocks", type=int, default=None, help="小样本冒烟时限制股票数量；默认全量")
     parser.add_argument("--min-train-samples", type=int, default=3000)
     parser.add_argument("--min-prediction-date", default="20240101")
@@ -48,10 +52,43 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def resolve_latest_local_daily_date(start_date: str, reference_code: str = REFERENCE_DAILY_CODE) -> str:
+    from xtquant import xtdata
+
+    today = datetime.now().strftime("%Y%m%d")
+    data = xtdata.get_local_data(
+        field_list=[],
+        stock_list=[reference_code],
+        period="1d",
+        start_time=start_date,
+        end_time=today,
+        count=-1,
+        dividend_type="front",
+        fill_data=False,
+    )
+    frame = data.get(reference_code) if isinstance(data, dict) else None
+    if frame is None or frame.empty:
+        raise RuntimeError(
+            "未指定 --end-date，且无法从本地 {} 日线识别最新交易日。"
+            "请先更新本地日线，或显式传入 --end-date YYYYMMDD。".format(reference_code)
+        )
+    dates = [normalize_date(index) for index in frame.index]
+    dates = [date for date in dates if date]
+    if not dates:
+        raise RuntimeError(
+            "未指定 --end-date，且本地 {} 日线没有可识别日期。"
+            "请显式传入 --end-date YYYYMMDD。".format(reference_code)
+        )
+    latest = max(dates)
+    print("自动识别 end_date: {}（参考本地 {} 日线；今日上限 {}）".format(latest, reference_code, today))
+    return latest
+
+
 def build_config(args: argparse.Namespace) -> StrategyConfig:
+    end_date = args.end_date or resolve_latest_local_daily_date(args.start_date)
     config = StrategyConfig(
         start_date=args.start_date,
-        end_date=args.end_date,
+        end_date=end_date,
         min_train_samples=args.min_train_samples,
         min_prediction_date=args.min_prediction_date,
         top_n=args.top_n,
@@ -63,7 +100,7 @@ def build_config(args: argparse.Namespace) -> StrategyConfig:
     if args.financial_cache_dir:
         return StrategyConfig(
             start_date=args.start_date,
-            end_date=args.end_date,
+            end_date=end_date,
             min_train_samples=args.min_train_samples,
             min_prediction_date=args.min_prediction_date,
             top_n=args.top_n,

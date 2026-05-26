@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from typing import Dict, List
 
 import pandas as pd
@@ -30,8 +31,11 @@ class FinancialFactorBuilder:
         if dataset.empty:
             return pd.DataFrame()
 
+        started = time.perf_counter()
         source = self.cache_loader.load_pershare_index()
+        print("财务因子: 读取 PershareIndex 缓存 {} 行".format(len(source)))
         source = self._prepare_source(source)
+        print("财务因子: 标准化后可用公告记录 {} 行，用时 {:.1f}s".format(len(source), time.perf_counter() - started))
         if source.empty:
             return self._empty_result(dataset)
 
@@ -39,29 +43,49 @@ class FinancialFactorBuilder:
         trade_dates = dataset[["code", "trade_date"]].drop_duplicates().copy()
         trade_dates["trade_dt"] = pd.to_datetime(trade_dates["trade_date"], format="%Y%m%d", errors="coerce")
         trade_dates = trade_dates.dropna(subset=["trade_dt"])
+        total_codes = int(trade_dates["code"].nunique())
+        total_rows = len(trade_dates)
+        source_by_code = {
+            code: frame.sort_values(["announce_dt", "report_dt"]).drop_duplicates("announce_dt", keep="last")
+            for code, frame in source.groupby("code", sort=False)
+        }
+        print("财务因子: 待合并股票 {} 只，交易日样本 {} 行".format(total_codes, total_rows))
 
-        for code, left in trade_dates.groupby("code"):
-            right = source[source["code"] == code].copy()
-            if right.empty:
+        matched_codes = 0
+        matched_rows = 0
+        for index, (code, left) in enumerate(trade_dates.groupby("code", sort=False), start=1):
+            right = source_by_code.get(code)
+            if right is None or right.empty:
                 frames.append(self._empty_code_result(left))
-                continue
-
-            right = right.sort_values(["announce_dt", "report_dt"]).drop_duplicates("announce_dt", keep="last")
-            merged = pd.merge_asof(
-                left.sort_values("trade_dt"),
-                right.sort_values("announce_dt"),
-                left_on="trade_dt",
-                right_on="announce_dt",
-                direction="backward",
-                allow_exact_matches=False,
-            )
-            merged["code"] = code
-            frames.append(merged)
+            else:
+                matched_codes += 1
+                merged = pd.merge_asof(
+                    left.sort_values("trade_dt"),
+                    right.sort_values("announce_dt"),
+                    left_on="trade_dt",
+                    right_on="announce_dt",
+                    direction="backward",
+                    allow_exact_matches=False,
+                )
+                merged["code"] = code
+                matched_rows += int(merged["fin_source_m_anntime"].notna().sum()) if "fin_source_m_anntime" in merged.columns else 0
+                frames.append(merged)
+            if index % 500 == 0 or index == total_codes:
+                print(
+                    "财务因子: 合并进度 {}/{}，有财务缓存股票 {}，已匹配样本 {}，累计 {:.1f}s".format(
+                        index,
+                        total_codes,
+                        matched_codes,
+                        matched_rows,
+                        time.perf_counter() - started,
+                    )
+                )
 
         if not frames:
             return self._empty_result(dataset)
         result = pd.concat(frames, ignore_index=True)
         keep_cols = ["code", "trade_date", "fin_source_m_anntime", "fin_source_m_timetag"] + self.config.financial_feature_cols
+        print("财务因子: 合并完成，输出 {} 行，总用时 {:.1f}s".format(len(result), time.perf_counter() - started))
         return result[keep_cols]
 
     def _prepare_source(self, source: pd.DataFrame) -> pd.DataFrame:

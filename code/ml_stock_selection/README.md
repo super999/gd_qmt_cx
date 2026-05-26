@@ -243,6 +243,55 @@ code/ml_stock_selection/outputs/live_execution_checklist/weekly_checklist_log.cs
 
 该 GUI 只做只读检查和人工确认，不下载数据、不训练模型、不自动下单。
 
+### GUI 里的“最新预测目录”和“小资金报告”
+
+`最新预测目录` 指一次 LightGBM 训练/预测的输出目录。这个目录在下面位置：
+
+```text
+code/ml_stock_selection/outputs/lightgbm_multi_factor_stock_selection/<run_id>/
+```
+
+目录里至少要有：
+
+- `predictions.csv`：每天每只股票的模型预测分数，后续组合和小资金实验都靠它。
+- `summary.json`：这次模型运行的摘要，GUI 会从里面读取是否启用财务因子、实际预测开始日期和结束日期。
+
+GUI 中显示的 `run` 或 `模型输出目录` 就是 `<run_id>`，例如：
+
+```text
+20260521_213451_start20200101_end20260511_pred20200101_all
+```
+
+`预测区间 20200102 至 20260509` 的意思是：这份 `predictions.csv` 里，模型实际有预测分数的交易日范围。它不是下单区间，也不是行情下载区间，只代表这份预测文件覆盖了哪些交易日。
+
+如需刷新最新预测目录，运行 LightGBM 脚本。财务增强版示例：
+
+```powershell
+d:\python_envs\gd_qmt_env\python.exe code/ml_stock_selection/lightgbm_multi_factor_stock_selection.py --use-financial-factors --min-prediction-date 20260101
+```
+
+不填 `--end-date` 时，脚本会自动读取本地 `510300.SH` 日线已有的最后一根日期作为结束日。周末会停在最近交易日；盘中如果当天日线尚未落地，会停在上一交易日；收盘后如果当天日线已经更新，会使用当天。
+
+如果你要固定复现实验，可以显式传入 `--end-date YYYYMMDD`。
+
+如果要做更长历史验证，可以把 `--min-prediction-date` 改成更早日期，例如 `20200101`。运行完成后会自动生成新的 `<run_id>` 目录，GUI 自动检查会选择最近生成且包含 `summary.json` 的目录。
+
+`小资金报告` 指把某个预测目录里的 `predictions.csv` 转换成“小资金约束近似回测”的报告。它不会重新训练模型，只检查在 40 万资金、最小买入 3 万、最多持仓数、现金保留比例等约束下，组合大概会是什么表现。
+
+刷新小资金报告时，把 `<最新预测目录>` 替换成上一步生成的完整目录，例如 `code/ml_stock_selection/outputs/lightgbm_multi_factor_stock_selection/20260521_213451_start20200101_end20260511_pred20200101_all`：
+
+```powershell
+d:\python_envs\gd_qmt_env\python.exe code/ml_stock_selection/run_small_capital_experiments.py --run-dirs <最新预测目录> --labels financial --filters none,growth_q50,bp_value_q70 --capital 400000 --min-trade-amount 30000 --max-holdings-values 5,8,10,12 --cash-reserve-rates 0.10,0.25
+```
+
+运行完成后会生成：
+
+```text
+code/ml_stock_selection/outputs/small_capital_experiments/<run_id>/small_capital_report.md
+```
+
+GUI 的自动检查只会显示最近生成的小资金报告；如果你重新训练了 LightGBM，但没有重新运行小资金实验，小资金报告仍然是旧预测文件对应的结果。
+
 ## 输出
 
 输出目录：

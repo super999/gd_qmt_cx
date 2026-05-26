@@ -28,6 +28,19 @@ WEEKLY_LOG = OUTPUT_DIR / "weekly_checklist_log.csv"
 DEFAULT_STRATEGY_ID = "bp_value_q70_max8_cash25_buffer24"
 DEFAULT_STRATEGY_CN = "低PB防守过滤；最多持有8只；至少保留25%现金；每周调仓；旧持仓前24名保留"
 REFERENCE_STOCK = "510300.SH"
+PREDICTION_REFRESH_COMMAND = (
+    r"d:\python_envs\gd_qmt_env\python.exe "
+    r"code\ml_stock_selection\lightgbm_multi_factor_stock_selection.py "
+    r"--use-financial-factors --min-prediction-date 20260101"
+)
+SMALL_CAPITAL_REFRESH_COMMAND = (
+    r"d:\python_envs\gd_qmt_env\python.exe "
+    r"code\ml_stock_selection\run_small_capital_experiments.py "
+    r"--run-dirs <最新预测目录> --labels financial "
+    r"--filters none,growth_q50,bp_value_q70 "
+    r"--capital 400000 --min-trade-amount 30000 "
+    r"--max-holdings-values 5,8,10,12 --cash-reserve-rates 0.10,0.25"
+)
 
 
 def current_week_id() -> str:
@@ -234,6 +247,39 @@ class LiveExecutionChecklistGui:
         self.auto_tree.pack(fill=tk.X)
         self._reload_auto_tree()
         ttk.Button(page, text="刷新自动检查", command=self.run_auto_checks).pack(anchor=tk.W, pady=(10, 0))
+
+        help_box = ttk.LabelFrame(page, text="这两个检查项怎么刷新")
+        help_box.pack(fill=tk.X, pady=(14, 0))
+        ttk.Label(
+            help_box,
+            text=(
+                "最新预测目录：LightGBM 模型训练/预测后的输出目录，里面必须有 predictions.csv 和 summary.json。"
+                "界面显示的 run 是这次模型运行的目录名；预测区间是 predictions.csv 覆盖的交易日期范围。"
+            ),
+            wraplength=940,
+            justify=tk.LEFT,
+        ).pack(anchor=tk.W, padx=8, pady=(8, 4))
+        ttk.Label(
+            help_box,
+            text="刷新命令：{}。不填 --end-date 时，脚本会自动使用本地 510300.SH 日线已有的最新交易日。".format(PREDICTION_REFRESH_COMMAND),
+            wraplength=940,
+            justify=tk.LEFT,
+        ).pack(anchor=tk.W, padx=8, pady=4)
+        ttk.Label(
+            help_box,
+            text=(
+                "小资金报告：基于上面的 predictions.csv，再按 40 万资金、最小买入金额、最多持仓数和现金保留比例做近似实盘约束回测。"
+                "它不会重新训练模型，只是把最新预测结果转换成小资金可执行组合报告。"
+            ),
+            wraplength=940,
+            justify=tk.LEFT,
+        ).pack(anchor=tk.W, padx=8, pady=4)
+        ttk.Label(
+            help_box,
+            text="刷新命令：{}".format(SMALL_CAPITAL_REFRESH_COMMAND),
+            wraplength=940,
+            justify=tk.LEFT,
+        ).pack(anchor=tk.W, padx=8, pady=(4, 8))
         return page
 
     def _build_risk_page(self) -> ttk.Frame:
@@ -398,9 +444,9 @@ class LiveExecutionChecklistGui:
         try:
             summary = json.loads((run_dir / "summary.json").read_text(encoding="utf-8"))
             if not summary.get("use_financial_factors"):
-                detail = "最新 run 不是财务增强版：{}".format(run_dir.name)
+                detail = "最新模型输出不是财务增强版；请重新运行带 --use-financial-factors 的 LightGBM。目录：{}".format(run_dir.name)
                 return {"status": "失败", "detail": detail, "path": str(run_dir)}
-            detail = "run={}，预测区间 {} 至 {}".format(
+            detail = "模型输出目录={}；预测文件=predictions.csv；可用预测日期 {} 至 {}。如需更新，请重新运行 LightGBM 训练/预测脚本。".format(
                 run_dir.name,
                 summary.get("actual_prediction_start_date", ""),
                 summary.get("actual_prediction_end_date", ""),
@@ -412,9 +458,17 @@ class LiveExecutionChecklistGui:
     def _check_small_capital(self) -> dict:
         run_dir = latest_dir_with_file(SMALL_CAPITAL_ROOT, "small_capital_report.md")
         if run_dir is None:
-            return {"status": "未找到", "detail": "尚未生成小资金实验报告。", "path": str(SMALL_CAPITAL_ROOT)}
+            return {
+                "status": "未找到",
+                "detail": "尚未生成小资金报告；请先用最新预测目录运行 run_small_capital_experiments.py。",
+                "path": str(SMALL_CAPITAL_ROOT),
+            }
         report = run_dir / "small_capital_report.md"
-        return {"status": "通过", "detail": "最新小资金报告 {}".format(run_dir.name), "path": str(report)}
+        return {
+            "status": "通过",
+            "detail": "小资金约束回测报告={}；它基于某次 predictions.csv 生成，不会自动跟随模型输出刷新。".format(run_dir.name),
+            "path": str(report),
+        }
 
     def _drain_queue(self) -> None:
         try:
