@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import time
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
@@ -23,6 +24,8 @@ class ModelBundle:
     up_model: Optional[Any]
     risk_model: Optional[Any]
     trained_until: str
+    train_start: str
+    train_end: str
     train_samples: int
 
 
@@ -31,23 +34,71 @@ class WalkForwardModeler:
         self.config = config
 
     def predict(self, dataset: pd.DataFrame) -> Tuple[pd.DataFrame, List[Dict[str, Any]], Optional[pd.DataFrame]]:
+        started = time.perf_counter()
         trainable = self._clean_train_data(dataset)
         all_dates = sorted(dataset["trade_date"].dropna().unique())
         prediction_dates = [date for date in all_dates if date >= self.config.min_prediction_date]
+        if self.config.recent_prediction_days is not None and self.config.recent_prediction_days > 0:
+            original_count = len(prediction_dates)
+            prediction_dates = prediction_dates[-self.config.recent_prediction_days :]
+            print(
+                "模型: recent_prediction_days={}，预测日期从 {} 个压缩为最近 {} 个".format(
+                    self.config.recent_prediction_days,
+                    original_count,
+                    len(prediction_dates),
+                ),
+                flush=True,
+            )
+        dataset_by_date = {date: frame for date, frame in dataset.groupby("trade_date", sort=False)}
+        print(
+            "模型: 可训练样本 {} 行，预测日期 {} 个，最早预测日 {}，特征数 {}".format(
+                len(trainable),
+                len(prediction_dates),
+                self.config.min_prediction_date,
+                len(self.config.feature_cols),
+            ),
+            flush=True,
+        )
         predictions: List[pd.DataFrame] = []
         train_logs: List[Dict[str, Any]] = []
         bundle: Optional[ModelBundle] = None
         last_feature_importance: Optional[pd.DataFrame] = None
 
         for prediction_index, trade_date in enumerate(prediction_dates, start=1):
-            day_df = dataset[dataset["trade_date"] == trade_date]
-            if day_df.empty:
+            day_df = dataset_by_date.get(trade_date)
+            if day_df is None or day_df.empty:
+                print(
+                    "模型: 预测进度 {}/{}，预测日期 {}，无当日样本，累计 {:.1f}s".format(
+                        prediction_index,
+                        len(prediction_dates),
+                        trade_date,
+                        time.perf_counter() - started,
+                    ),
+                    flush=True,
+                )
                 continue
             need_retrain = bundle is None or (prediction_index - 1) % self.config.retrain_every_n_days == 0
             if need_retrain:
                 train_df = trainable[trainable["exit_date"] < trade_date].copy()
                 if len(train_df) < self.config.min_train_samples:
+                    print(
+                        "模型: {} 可训练样本 {} < min_train_samples {}，跳过".format(
+                            trade_date,
+                            len(train_df),
+                            self.config.min_train_samples,
+                        ),
+                        flush=True,
+                    )
                     continue
+                print(
+                    "模型: 重新训练，预测日 {}，训练样本 {}，训练区间 {} 至 {}".format(
+                        trade_date,
+                        len(train_df),
+                        train_df["trade_date"].min(),
+                        train_df["trade_date"].max(),
+                    ),
+                    flush=True,
+                )
                 bundle = self._train_models(train_df, trained_until=trade_date)
                 train_logs.append(self._build_train_log(trade_date, train_df))
                 last_feature_importance = self._feature_importance(bundle)
@@ -55,12 +106,29 @@ class WalkForwardModeler:
             if bundle is None:
                 continue
             pred = self._predict_one_day(bundle, day_df)
+            pred_rows = 0
             if not pred.empty:
+                pred_rows = len(pred)
                 predictions.append(pred)
+            print(
+                "模型: 预测进度 {}/{}，预测日期 {}，当日预测 {} 行，当前模型训练区间 {} 至 {}，训练样本 {}，已生成预测批次 {}，累计 {:.1f}s".format(
+                    prediction_index,
+                    len(prediction_dates),
+                    trade_date,
+                    pred_rows,
+                    bundle.train_start,
+                    bundle.train_end,
+                    bundle.train_samples,
+                    len(predictions),
+                    time.perf_counter() - started,
+                ),
+                flush=True,
+            )
 
         if not predictions:
             return pd.DataFrame(), train_logs, last_feature_importance
         pred_df = pd.concat(predictions, ignore_index=True)
+        print("模型: 预测完成，输出 {} 行，总用时 {:.1f}s".format(len(pred_df), time.perf_counter() - started), flush=True)
         return pred_df.sort_values(["trade_date", "pred_return_5d"], ascending=[True, False]), train_logs, last_feature_importance
 
     def _clean_train_data(self, df: pd.DataFrame) -> pd.DataFrame:
@@ -79,7 +147,15 @@ class WalkForwardModeler:
         return_model.fit(x_train, y_return)
         up_model = self._fit_classifier(x_train, y_up)
         risk_model = self._fit_classifier(x_train, y_risk)
-        return ModelBundle(return_model, up_model, risk_model, trained_until, len(train_df))
+        return ModelBundle(
+            return_model=return_model,
+            up_model=up_model,
+            risk_model=risk_model,
+            trained_until=trained_until,
+            train_start=str(train_df["trade_date"].min()),
+            train_end=str(train_df["trade_date"].max()),
+            train_samples=len(train_df),
+        )
 
     def _build_regressor(self) -> Any:
         return lgb.LGBMRegressor(
@@ -110,7 +186,7 @@ class WalkForwardModeler:
         return model
 
     def _predict_one_day(self, bundle: ModelBundle, day_df: pd.DataFrame) -> pd.DataFrame:
-        required = self.config.market_feature_cols + ["entry_date", "realized_next_open_return"]
+        required = self.config.feature_cols
         candidates = day_df[day_df["base_eligible"]].dropna(subset=required).copy()
         if candidates.empty:
             return pd.DataFrame()

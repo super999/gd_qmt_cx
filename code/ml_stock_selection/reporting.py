@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import sys
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -79,8 +80,9 @@ class ResultWriter:
         run_dir.mkdir(parents=True, exist_ok=True)
         if feature_importance is None:
             feature_importance = pd.DataFrame(columns=["feature", "feature_cn", "importance"])
+        dataset_suffix = "parquet" if self.config.factor_dataset_format == "parquet" else "csv"
         output_paths = {
-            "dataset": run_dir / "factor_dataset.csv",
+            "dataset": run_dir / "factor_dataset.{}".format(dataset_suffix),
             "predictions": run_dir / "predictions.csv",
             "selected_portfolio": run_dir / "selected_portfolio.csv",
             "daily_nav": run_dir / "daily_nav.csv",
@@ -90,17 +92,63 @@ class ResultWriter:
             "summary": run_dir / "summary.json",
             "report": run_dir / "report.md",
         }
-        dataset.to_csv(output_paths["dataset"], index=False, encoding="utf-8-sig")
-        pred_df.to_csv(output_paths["predictions"], index=False, encoding="utf-8-sig")
-        selections.to_csv(output_paths["selected_portfolio"], index=False, encoding="utf-8-sig")
-        daily_df.to_csv(output_paths["daily_nav"], index=False, encoding="utf-8-sig")
-        trades_df.to_csv(output_paths["trades"], index=False, encoding="utf-8-sig")
-        pd.DataFrame(train_logs).to_csv(output_paths["train_logs"], index=False, encoding="utf-8-sig")
-        feature_importance.to_csv(output_paths["feature_importance"], index=False, encoding="utf-8-sig")
+        started = time.perf_counter()
+        self._write_dataset(dataset, output_paths["dataset"])
+        self._write_csv("predictions.csv", pred_df, output_paths["predictions"])
+        self._write_csv("selected_portfolio.csv", selections, output_paths["selected_portfolio"])
+        self._write_csv("daily_nav.csv", daily_df, output_paths["daily_nav"])
+        self._write_csv("trades.csv", trades_df, output_paths["trades"])
+        self._write_csv("train_logs.csv", pd.DataFrame(train_logs), output_paths["train_logs"])
+        self._write_csv("feature_importance.csv", feature_importance, output_paths["feature_importance"])
         summary = self._build_summary(run_id, max_stocks, codes, dataset, pred_df, daily_df, train_logs)
+        json_started = time.perf_counter()
+        print("写出: summary.json", flush=True)
         output_paths["summary"].write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
+        print("写出完成: summary.json，用时 {:.1f}s".format(time.perf_counter() - json_started), flush=True)
+        report_started = time.perf_counter()
+        print("写出: report.md", flush=True)
         output_paths["report"].write_text(self._build_report(summary, feature_importance, output_paths), encoding="utf-8")
+        print("写出完成: report.md，用时 {:.1f}s".format(time.perf_counter() - report_started), flush=True)
+        print("写出完成，输出目录: {}，用时 {:.1f}s".format(run_dir, time.perf_counter() - started), flush=True)
         return output_paths
+
+    def _write_dataset(self, df: pd.DataFrame, path: Path) -> None:
+        if self.config.factor_dataset_format == "csv":
+            self._write_csv("factor_dataset.csv", df, path)
+            return
+
+        started = time.perf_counter()
+        print("写出: factor_dataset.parquet（{} 行，{} 列）".format(len(df), len(df.columns)), flush=True)
+        try:
+            df.to_parquet(path, index=False, engine="pyarrow", compression="snappy")
+        except ImportError as exc:
+            raise RuntimeError(
+                "写出 Parquet 需要 pyarrow。请运行："
+                "d:\\python_envs\\gd_qmt_env\\python.exe -m pip install pyarrow，"
+                "或改用 --factor-dataset-format csv。"
+            ) from exc
+        size_mb = path.stat().st_size / 1024 / 1024 if path.exists() else 0.0
+        print(
+            "写出完成: factor_dataset.parquet，大小 {:.1f} MB，用时 {:.1f}s".format(
+                size_mb,
+                time.perf_counter() - started,
+            ),
+            flush=True,
+        )
+
+    def _write_csv(self, label: str, df: pd.DataFrame, path: Path) -> None:
+        started = time.perf_counter()
+        print("写出: {}（{} 行，{} 列）".format(label, len(df), len(df.columns)), flush=True)
+        df.to_csv(path, index=False, encoding="utf-8-sig")
+        size_mb = path.stat().st_size / 1024 / 1024 if path.exists() else 0.0
+        print(
+            "写出完成: {}，大小 {:.1f} MB，用时 {:.1f}s".format(
+                label,
+                size_mb,
+                time.perf_counter() - started,
+            ),
+            flush=True,
+        )
 
     def _build_run_id(self, max_stocks: Optional[int]) -> str:
         stock_scope = "all" if max_stocks is None else "max{}".format(max_stocks)
@@ -149,6 +197,7 @@ class ResultWriter:
             "start_date": self.config.start_date,
             "end_date": self.config.end_date,
             "configured_min_prediction_date": self.config.min_prediction_date,
+            "recent_prediction_days": self.config.recent_prediction_days,
             "actual_prediction_start_date": str(pred_df["trade_date"].min()) if not pred_df.empty else "",
             "actual_prediction_end_date": str(pred_df["trade_date"].max()) if not pred_df.empty else "",
             "max_stocks": max_stocks,
@@ -163,6 +212,7 @@ class ResultWriter:
             "hold_rank_buffer": self.config.hold_rank_buffer,
             "min_holding_days": self.config.min_holding_days,
             "transaction_cost_rate": self.config.transaction_cost_rate,
+            "factor_dataset_format": self.config.factor_dataset_format,
             "use_financial_factors": self.config.use_financial_factors,
             "financial_cache_dir": str(self.config.financial_cache_dir),
             "financial_factor_coverage": self._financial_factor_coverage(dataset),
@@ -210,6 +260,7 @@ class ResultWriter:
             "- LightGBM：{}".format(summary["lightgbm_version"]),
             "- 日期范围：{} 至 {}".format(summary["start_date"], summary["end_date"]),
             "- 配置的最早预测日：{}".format(summary["configured_min_prediction_date"]),
+            "- 最近预测天数限制：{}".format(summary.get("recent_prediction_days")),
             "- 实际预测区间：{} 至 {}".format(summary["actual_prediction_start_date"], summary["actual_prediction_end_date"]),
             "- 股票池限制：{}".format(summary["stock_scope"]),
             "- 股票数：{}".format(summary["stock_count"]),
@@ -222,6 +273,7 @@ class ResultWriter:
             "- 排名缓冲：{}".format(summary["hold_rank_buffer"]),
             "- 最少持有天数：{}".format(summary["min_holding_days"]),
             "- 单边交易成本：{}".format(summary["transaction_cost_rate"]),
+            "- factor_dataset 输出格式：{}".format(summary.get("factor_dataset_format")),
             "- 财务因子：{}".format("启用" if summary["use_financial_factors"] else "未启用"),
             "",
             "## 组合结果",

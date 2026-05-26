@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 
 FEATURE_LABELS: Dict[str, str] = {
@@ -65,8 +65,10 @@ class StrategyConfig:
     min_train_samples: int = 3000
     retrain_every_n_days: int = 20
     min_prediction_date: str = "20240101"
+    recent_prediction_days: Optional[int] = None
     random_state: int = 20260514
     output_dir: Path = Path(__file__).resolve().parent / "outputs" / "lightgbm_multi_factor_stock_selection"
+    factor_dataset_format: str = "parquet"
     financial_cache_dir: Path = Path(__file__).resolve().parent / "outputs" / "financial_cache"
     use_financial_factors: bool = False
     feature_labels: Dict[str, str] = field(default_factory=lambda: FEATURE_LABELS.copy())
