@@ -24,6 +24,9 @@ from run_portfolio_experiments import describe_rebalance_frequency
 from utils import print_title
 
 
+DEFAULT_LIVE_EXPERIMENT_NAME = "bp_value_q70_max8_cash25_buffer24"
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="小资金实盘约束近似回测：资金、最小买入金额、有限持仓数")
     parser.add_argument("--run-dirs", nargs="+", required=True, help="一个或多个 LightGBM 输出 run 目录，需包含 predictions.csv")
@@ -469,6 +472,66 @@ def build_report(summary_df: pd.DataFrame, output_dir: Path) -> str:
     return "\n".join(lines) + "\n"
 
 
+def write_latest_candidates(output_dir: Path, summary_df: pd.DataFrame) -> Path:
+    if summary_df.empty:
+        raise RuntimeError("summary_df 为空，无法生成 latest_candidates.csv")
+
+    preferred = summary_df[summary_df["experiment_name"] == DEFAULT_LIVE_EXPERIMENT_NAME]
+    if preferred.empty:
+        ranked = summary_df.sort_values(["max_drawdown_with_cost", "total_return_with_cost"], ascending=[False, False])
+        selected = ranked.iloc[0]
+    else:
+        selected = preferred.iloc[0]
+
+    experiment_dir = output_dir / str(selected["source_label"]) / str(selected["experiment_name"])
+    holdings_path = experiment_dir / "holdings.csv"
+    trades_path = experiment_dir / "trades.csv"
+    if not holdings_path.exists():
+        raise FileNotFoundError("未找到持仓候选文件: {}".format(holdings_path))
+
+    holdings = pd.read_csv(holdings_path, encoding="utf-8-sig")
+    if holdings.empty:
+        candidates = pd.DataFrame()
+    else:
+        holdings["trade_date"] = holdings["trade_date"].astype(str)
+        latest_date = str(holdings["trade_date"].max())
+        candidates = holdings[holdings["trade_date"] == latest_date].copy()
+        candidates["candidate_date"] = latest_date
+        candidates["action_hint"] = "保留/持有"
+        if trades_path.exists():
+            trades = pd.read_csv(trades_path, encoding="utf-8-sig")
+            if not trades.empty:
+                trades["trade_date"] = trades["trade_date"].astype(str)
+                latest_trades = trades[trades["trade_date"] == latest_date]
+                action_map = dict(zip(latest_trades["code"], latest_trades["action"]))
+                candidates["action_hint"] = candidates["code"].map(action_map).fillna("保留/持有")
+                candidates["action_hint"] = candidates["action_hint"].replace({"buy": "新增/加仓", "sell": "减仓/卖出"})
+        candidates["source_label"] = selected["source_label"]
+        candidates["experiment_name"] = selected["experiment_name"]
+        candidates["experiment_name_cn"] = selected["experiment_name_cn"]
+        candidates["source_run_dir"] = selected["source_run_dir"]
+        candidates = candidates[
+            [
+                "candidate_date",
+                "code",
+                "name",
+                "action_hint",
+                "shares",
+                "value",
+                "pred_return_5d",
+                "pred_up_prob",
+                "risk_score",
+                "experiment_name",
+                "experiment_name_cn",
+                "source_run_dir",
+            ]
+        ].sort_values(["action_hint", "value"], ascending=[True, False])
+
+    path = output_dir / "latest_candidates.csv"
+    candidates.to_csv(path, index=False, encoding="utf-8-sig")
+    return path
+
+
 def main() -> int:
     args = parse_args()
     run_dirs = [Path(path) for path in args.run_dirs]
@@ -545,11 +608,13 @@ def main() -> int:
     summary_df = pd.DataFrame(summaries)
     summary_path = output_dir / "small_capital_summary.csv"
     report_path = output_dir / "small_capital_report.md"
+    candidates_path = write_latest_candidates(output_dir, summary_df)
     summary_df.to_csv(summary_path, index=False, encoding="utf-8-sig")
     report_path.write_text(build_report(summary_df, output_dir), encoding="utf-8")
     print_title("完成")
     print("summary: {}".format(summary_path))
     print("report: {}".format(report_path))
+    print("latest_candidates: {}".format(candidates_path))
     return 0
 
 
