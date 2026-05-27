@@ -315,7 +315,7 @@ GUI 中显示的 `run` 或 `模型输出目录` 就是 `<run_id>`，例如：
 d:\python_envs\gd_qmt_env\python.exe code/ml_stock_selection/lightgbm_multi_factor_stock_selection.py --use-financial-factors --min-prediction-date 20260101 --recent-prediction-days 30
 ```
 
-不填 `--end-date` 时，脚本会自动读取本地 `510300.SH` 日线已有的最后一根日期作为结束日。周末会停在最近交易日；盘中如果当天日线尚未落地，会停在上一交易日；收盘后如果当天日线已经更新，会使用当天。
+不填 `--end-date` 时，脚本会自动读取本地日线探针 `000001.SZ / 600000.SH / 510300.SH` 的最后一根“完整日线”作为结束日。完整日线要求 `volume` 和 `amount` 都大于 0，避免把收盘后刚出现但成交量/成交额仍为 0 的占位行当作可用数据。周末会停在最近交易日；盘中如果当天日线尚未完整落地，会停在上一交易日；收盘后如果当天完整日线已经更新，会使用当天。
 
 如果你要固定复现实验，可以显式传入 `--end-date YYYYMMDD`。
 

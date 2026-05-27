@@ -33,7 +33,26 @@ from reporting import MetricsCalculator
 from utils import normalize_date, print_title
 
 
-REFERENCE_DAILY_CODE = "510300.SH"
+REFERENCE_DAILY_CODES = ["000001.SZ", "600000.SH", "510300.SH"]
+
+
+def latest_complete_daily_date(frame) -> str:
+    if frame is None or frame.empty:
+        return ""
+    complete_dates: list[str] = []
+    for index, row in frame.iterrows():
+        date = normalize_date(index)
+        if not date:
+            continue
+        try:
+            volume = float(row.get("volume", 0) or 0)
+            amount = float(row.get("amount", 0) or 0)
+        except Exception:
+            volume = 0.0
+            amount = 0.0
+        if volume > 0 and amount > 0:
+            complete_dates.append(date)
+    return max(complete_dates) if complete_dates else ""
 
 
 def parse_args() -> argparse.Namespace:
@@ -54,13 +73,14 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def resolve_latest_local_daily_date(start_date: str, reference_code: str = REFERENCE_DAILY_CODE) -> str:
+def resolve_latest_local_daily_date(start_date: str, reference_codes: list[str] | None = None) -> str:
     from xtquant import xtdata
 
+    codes = reference_codes or REFERENCE_DAILY_CODES
     today = datetime.now().strftime("%Y%m%d")
     data = xtdata.get_local_data(
         field_list=[],
-        stock_list=[reference_code],
+        stock_list=codes,
         period="1d",
         start_time=start_date,
         end_time=today,
@@ -68,21 +88,36 @@ def resolve_latest_local_daily_date(start_date: str, reference_code: str = REFER
         dividend_type="front",
         fill_data=False,
     )
-    frame = data.get(reference_code) if isinstance(data, dict) else None
-    if frame is None or frame.empty:
+    latest_by_code: dict[str, str] = {}
+    complete_latest_by_code: dict[str, str] = {}
+    if isinstance(data, dict):
+        for code in codes:
+            frame = data.get(code)
+            if frame is None or frame.empty:
+                continue
+            dates = [normalize_date(index) for index in frame.index]
+            dates = [date for date in dates if date]
+            if dates:
+                latest_by_code[code] = max(dates)
+            complete_latest = latest_complete_daily_date(frame)
+            if complete_latest:
+                complete_latest_by_code[code] = complete_latest
+    if not complete_latest_by_code:
         raise RuntimeError(
-            "未指定 --end-date，且无法从本地 {} 日线识别最新交易日。"
-            "请先更新本地日线，或显式传入 --end-date YYYYMMDD。".format(reference_code)
+            "未指定 --end-date，且无法从本地 {} 日线识别最新完整交易日。"
+            "请先更新本地日线，或显式传入 --end-date YYYYMMDD。".format(",".join(codes))
         )
-    dates = [normalize_date(index) for index in frame.index]
-    dates = [date for date in dates if date]
-    if not dates:
-        raise RuntimeError(
-            "未指定 --end-date，且本地 {} 日线没有可识别日期。"
-            "请显式传入 --end-date YYYYMMDD。".format(reference_code)
+    latest = max(complete_latest_by_code.values())
+    raw_detail = ", ".join("{}={}".format(code, date) for code, date in latest_by_code.items())
+    complete_detail = ", ".join("{}={}".format(code, date) for code, date in complete_latest_by_code.items())
+    print(
+        "自动识别 end_date: {}（完整日线探针 volume/amount>0：{}；原始最新日期：{}；今日上限 {}）".format(
+            latest,
+            complete_detail,
+            raw_detail,
+            today,
         )
-    latest = max(dates)
-    print("自动识别 end_date: {}（参考本地 {} 日线；今日上限 {}）".format(latest, reference_code, today))
+    )
     return latest
 
 

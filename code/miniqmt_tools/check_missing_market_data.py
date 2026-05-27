@@ -123,6 +123,9 @@ CACHED_OK_DATES_BY_CODE: Dict[str, set] = {}
 CACHED_OK_COUNT_BY_CODE: Dict[str, int] = {}
 CACHE_SKIPPED_CHECK_COUNT = 0
 CONFIRMED_CACHE_STATUSES = ("ok", "missing_after_download")
+# 最新交易日最容易出现“日期行已生成，但 volume/amount 仍为 0”的占位数据。
+# 默认不信任缓存里的最新交易日，强制实际读取复查。
+FORCE_RECHECK_LATEST_DATE = True
 
 
 @dataclass
@@ -309,6 +312,30 @@ def suspend_flag_value(row: pd.Series) -> Optional[int]:
         return int(float(value))
     except Exception:
         return None
+
+
+def numeric_value(row: pd.Series, field: str) -> Optional[float]:
+    if field not in row.index:
+        return None
+    value = row.get(field)
+    if is_missing_value(value):
+        return None
+    try:
+        return float(value)
+    except Exception:
+        return None
+
+
+def is_zero_volume_amount_row(row: pd.Series) -> bool:
+    volume = numeric_value(row, "volume")
+    amount = numeric_value(row, "amount")
+    return volume == 0 and amount == 0
+
+
+def recheck_dates(expected_dates: List[str]) -> set:
+    if not FORCE_RECHECK_LATEST_DATE or not expected_dates:
+        return set()
+    return {max(expected_dates)}
 
 
 def chunked(items: Sequence[str], size: int) -> Iterable[List[str]]:
@@ -810,6 +837,7 @@ def load_cached_ok_counts(codes: List[str], expected_dates: List[str], statuses:
 
     min_date = min(expected_dates)
     max_date = max(expected_dates)
+    forced_dates = recheck_dates(expected_dates)
     total_rows = 0
     total_batches = math.ceil(len(codes) / 500)
     log("开始读取检查缓存计数，缓存文件 {} MB，批次数 {}".format(round(CHECK_CACHE_PATH.stat().st_size / 1024 / 1024, 1), total_batches))
@@ -823,6 +851,16 @@ def load_cached_ok_counts(codes: List[str], expected_dates: List[str], statuses:
                 + [PERIOD, DIVIDEND_TYPE, min_date, max_date]
                 + batch_codes
             )
+            force_clause = ""
+            if forced_dates:
+                force_placeholders = ",".join("?" for _ in forced_dates)
+                force_clause = " AND trade_date NOT IN ({})".format(force_placeholders)
+                params = (
+                    list(CONFIRMED_CACHE_STATUSES)
+                    + [PERIOD, DIVIDEND_TYPE, min_date, max_date]
+                    + sorted(forced_dates)
+                    + batch_codes
+                )
             rows = conn.execute(
                 """
                 SELECT code, COUNT(*)
@@ -831,9 +869,10 @@ def load_cached_ok_counts(codes: List[str], expected_dates: List[str], statuses:
                   AND period = ?
                   AND dividend_type = ?
                   AND trade_date BETWEEN ? AND ?
+                  {}
                   AND code IN ({})
                 GROUP BY code
-                """.format(status_placeholders, placeholders),
+                """.format(status_placeholders, force_clause, placeholders),
                 params,
             ).fetchall()
             for code, count in rows:
@@ -842,7 +881,10 @@ def load_cached_ok_counts(codes: List[str], expected_dates: List[str], statuses:
                 total_rows += count_int
 
     log("完成读取检查缓存计数: 已确认 code/date {}".format(total_rows))
-    add_status(statuses, "check_cache", "OK", "命中已确认 code/date 计数: {}".format(total_rows))
+    detail = "命中已确认 code/date 计数: {}".format(total_rows)
+    if forced_dates:
+        detail += "；强制复查日期: {}".format(",".join(sorted(forced_dates)))
+    add_status(statuses, "check_cache", "OK", detail)
 
 
 def load_cached_ok_dates(codes: List[str], expected_dates: List[str], statuses: List[CheckStatus]) -> None:
@@ -854,6 +896,7 @@ def load_cached_ok_dates(codes: List[str], expected_dates: List[str], statuses: 
 
     min_date = min(expected_dates)
     max_date = max(expected_dates)
+    forced_dates = recheck_dates(expected_dates)
     total_rows = 0
     total_batches = math.ceil(len(codes) / 500)
     log("开始读取本轮需检查股票的缓存明细日期，股票 {}，批次数 {}".format(len(codes), total_batches))
@@ -867,6 +910,16 @@ def load_cached_ok_dates(codes: List[str], expected_dates: List[str], statuses: 
                 + [PERIOD, DIVIDEND_TYPE, min_date, max_date]
                 + batch_codes
             )
+            force_clause = ""
+            if forced_dates:
+                force_placeholders = ",".join("?" for _ in forced_dates)
+                force_clause = " AND trade_date NOT IN ({})".format(force_placeholders)
+                params = (
+                    list(CONFIRMED_CACHE_STATUSES)
+                    + [PERIOD, DIVIDEND_TYPE, min_date, max_date]
+                    + sorted(forced_dates)
+                    + batch_codes
+                )
             rows = conn.execute(
                 """
                 SELECT code, trade_date
@@ -875,8 +928,9 @@ def load_cached_ok_dates(codes: List[str], expected_dates: List[str], statuses: 
                   AND period = ?
                   AND dividend_type = ?
                   AND trade_date BETWEEN ? AND ?
+                  {}
                   AND code IN ({})
-                """.format(status_placeholders, placeholders),
+                """.format(status_placeholders, force_clause, placeholders),
                 params,
             ).fetchall()
             total_rows += len(rows)
@@ -884,7 +938,10 @@ def load_cached_ok_dates(codes: List[str], expected_dates: List[str], statuses: 
                 CACHED_OK_DATES_BY_CODE.setdefault(str(code), set()).add(str(trade_date))
 
     log("完成读取缓存明细日期: {}".format(total_rows))
-    add_status(statuses, "check_cache", "OK", "命中已确认 code/date 明细: {}".format(total_rows))
+    detail = "命中已确认 code/date 明细: {}".format(total_rows)
+    if forced_dates:
+        detail += "；强制复查日期: {}".format(",".join(sorted(forced_dates)))
+    add_status(statuses, "check_cache", "OK", detail)
 
 
 def filter_codes_with_unchecked_dates(
@@ -958,6 +1015,8 @@ def record_successful_checks(
             row = frame.iloc[pos]
             missing_fields = [field for field in REQUIRED_FIELDS if field not in row.index or is_missing_value(row.get(field))]
             if missing_fields:
+                continue
+            if is_zero_volume_amount_row(row) and suspend_flag_value(row) not in (1,):
                 continue
             rows.append((code, date, PERIOD, DIVIDEND_TYPE, "ok", now, source))
 
@@ -1082,6 +1141,19 @@ def collect_missing_records(
                         "missing_type": "missing_fields",
                         "missing_fields": ",".join(missing_fields),
                         "detail": "行情行存在但关键字段缺失",
+                    }
+                )
+                continue
+
+            if is_zero_volume_amount_row(row) and suspend_flag_value(row) not in (1,):
+                records.append(
+                    {
+                        "code": code,
+                        "sector": code_source.get(code, ""),
+                        "date": date,
+                        "missing_type": "zero_volume_amount",
+                        "missing_fields": "volume,amount",
+                        "detail": "行情行存在但 volume 和 amount 均为 0，疑似收盘后占位数据或未完整落地",
                     }
                 )
 
