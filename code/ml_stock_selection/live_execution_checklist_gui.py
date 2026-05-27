@@ -27,7 +27,7 @@ WEEKLY_LOG = OUTPUT_DIR / "weekly_checklist_log.csv"
 
 DEFAULT_STRATEGY_ID = "bp_value_q70_max8_cash25_buffer24"
 DEFAULT_STRATEGY_CN = "低PB防守过滤；最多持有8只；至少保留25%现金；每周调仓；旧持仓前24名保留"
-REFERENCE_STOCK = "510300.SH"
+DAILY_CHECK_STOCKS = ["000001.SZ", "600000.SH", "510300.SH"]
 DAILY_DATA_READY_TIME = "15:30"
 PREDICTION_REFRESH_COMMAND = (
     r"d:\python_envs\gd_qmt_env\python.exe "
@@ -74,6 +74,45 @@ def latest_dir_with_file(root: Path, required_name: str) -> Path | None:
 def latest_file(root: Path, required_name: str) -> Path | None:
     run_dir = latest_dir_with_file(root, required_name)
     return run_dir / required_name if run_dir is not None else None
+
+
+def latest_prediction_run_dir() -> Path | None:
+    run_dir = latest_dir_with_file(PREDICTION_ROOT, "summary.json")
+    if run_dir is None:
+        return None
+    if not (run_dir / "predictions.csv").exists():
+        return None
+    return run_dir
+
+
+def latest_complete_daily_date(frame: pd.DataFrame) -> str:
+    if frame is None or frame.empty:
+        return ""
+    complete_dates: list[str] = []
+    for index, row in frame.iterrows():
+        date = normalize_date(index)
+        if not date:
+            continue
+        try:
+            volume = float(row.get("volume", 0) or 0)
+            amount = float(row.get("amount", 0) or 0)
+        except Exception:
+            volume = 0.0
+            amount = 0.0
+        if volume > 0 and amount > 0:
+            complete_dates.append(date)
+    return max(complete_dates) if complete_dates else ""
+
+
+def describe_trade_action(row: pd.Series) -> str:
+    action = str(row.get("action", "")).strip()
+    old_value = float(row.get("old_value", 0.0) or 0.0)
+    new_value = float(row.get("new_value", 0.0) or 0.0)
+    if action == "buy":
+        return "新增买入" if old_value <= 1e-6 else "加仓后持有"
+    if action == "sell":
+        return "清仓卖出" if new_value <= 1e-6 else "减仓后持有"
+    return action or "保留/持有"
 
 
 class LiveExecutionChecklistGui:
@@ -143,12 +182,14 @@ class LiveExecutionChecklistGui:
         self.run_note_text: tk.Text | None = None
         self.action_note_text: tk.Text | None = None
         self.holding_note_text: tk.Text | None = None
+        self._last_saved_snapshot: dict | None = None
 
         self._build_ui()
         self._restore_text_widgets()
         self._show_page("weekly")
         self._refresh_risk()
         self._refresh_overall_status()
+        self._last_saved_snapshot = self._collect_comparable_state()
         self.root.after(150, self._drain_queue)
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
         self.root.bind("<Control-s>", self.save_state_shortcut)
@@ -164,9 +205,13 @@ class LiveExecutionChecklistGui:
         return PREDICTION_REFRESH_COMMAND
 
     def _small_capital_refresh_command(self) -> str:
-        prediction_dir = self.auto_path_vars["prediction_run"].get().strip() if hasattr(self, "auto_path_vars") else ""
-        if not prediction_dir:
-            prediction_dir = "<最新预测目录>"
+        latest_run = latest_prediction_run_dir()
+        if latest_run is not None:
+            prediction_dir = str(latest_run)
+        else:
+            prediction_dir = self.auto_path_vars["prediction_run"].get().strip() if hasattr(self, "auto_path_vars") else ""
+            if not prediction_dir:
+                prediction_dir = "<最新预测目录>"
         return SMALL_CAPITAL_REFRESH_COMMAND.replace("<最新预测目录>", '"{}"'.format(prediction_dir))
 
     def _build_ui(self) -> None:
@@ -277,47 +322,105 @@ class LiveExecutionChecklistGui:
         ttk.Label(page, text="周度准备清单", font=("Microsoft YaHei UI", 13, "bold")).pack(anchor=tk.W)
         ttk.Label(page, text="每周生成候选前，先完成这些确认。自动检查项可在“自动检查”页一键刷新。").pack(anchor=tk.W, pady=(4, 12))
 
-        box = ttk.LabelFrame(page, text="准备项")
-        box.pack(fill=tk.X)
-        rows = [
+        box = ttk.LabelFrame(page, text="自动准备项")
+        box.pack(fill=tk.BOTH, expand=False)
+        tree_box = ttk.Frame(box)
+        tree_box.pack(fill=tk.BOTH, expand=True, padx=8, pady=8)
+        columns = ("item", "status", "detail")
+        self.weekly_tree = ttk.Treeview(tree_box, columns=columns, show="headings", height=4)
+        self.weekly_tree.heading("item", text="检查项")
+        self.weekly_tree.heading("status", text="状态")
+        self.weekly_tree.heading("detail", text="详情")
+        self.weekly_tree.column("item", width=360, stretch=False)
+        self.weekly_tree.column("status", width=80, stretch=False)
+        self.weekly_tree.column("detail", width=1100, stretch=False)
+        weekly_y = ttk.Scrollbar(tree_box, orient=tk.VERTICAL, command=self.weekly_tree.yview)
+        weekly_x = ttk.Scrollbar(tree_box, orient=tk.HORIZONTAL, command=self.weekly_tree.xview)
+        self.weekly_tree.configure(yscrollcommand=weekly_y.set, xscrollcommand=weekly_x.set)
+        self.weekly_tree.grid(row=0, column=0, sticky="nsew")
+        weekly_y.grid(row=0, column=1, sticky="ns")
+        weekly_x.grid(row=1, column=0, sticky="ew")
+        tree_box.rowconfigure(0, weight=1)
+        tree_box.columnconfigure(0, weight=1)
+        self.weekly_tree.bind("<Double-1>", self.show_weekly_detail)
+        self.weekly_rows = [
             ("MiniQMT 已启动并可连接", "miniqmt"),
             ("本地日线行情已更新到预期最新交易日", "daily_data"),
             ("财务缓存 raw_PershareIndex.csv 存在且非空", "financial_cache"),
             ("最近一次财务增强模型预测输出目录确认", "prediction_run"),
+        ]
+        self._reload_weekly_tree()
+        ttk.Label(box, text="提示：详情太长时可拖动横向滚动条；双击某一行可查看完整详情。", foreground="#555555").pack(anchor=tk.W, padx=8, pady=(0, 8))
+
+        manual_box = ttk.LabelFrame(page, text="人工准备项")
+        manual_box.pack(fill=tk.X, pady=(12, 0))
+        for label, key in [
             ("当前账户总资产、可用资金、持仓已记录", "account_recorded"),
             ("本周没有触发暂停交易条件", "no_pause_trigger"),
-        ]
-        for index, (label, key) in enumerate(rows):
-            row = ttk.Frame(box)
-            row.pack(fill=tk.X, padx=8, pady=5)
-            ttk.Label(row, text=label, width=42).pack(side=tk.LEFT)
-            if key in self.auto_status_vars:
-                ttk.Label(row, textvariable=self.auto_status_vars[key], width=10).pack(side=tk.LEFT)
-                ttk.Label(row, textvariable=self.auto_detail_vars[key]).pack(side=tk.LEFT, fill=tk.X, expand=True)
-            else:
-                ttk.Checkbutton(row, text="已完成", variable=self.manual_checks[key], command=self._refresh_overall_status).pack(side=tk.LEFT)
+        ]:
+            ttk.Checkbutton(
+                manual_box,
+                text=label,
+                variable=self.manual_checks[key],
+                command=self._on_manual_check_changed,
+            ).pack(anchor=tk.W, padx=8, pady=5)
 
         expected = ttk.LabelFrame(page, text="检查参数")
         expected.pack(fill=tk.X, pady=(12, 0))
         ttk.Label(expected, text="预期最新交易日 YYYYMMDD").pack(side=tk.LEFT, padx=8, pady=8)
         ttk.Entry(expected, textvariable=self.expected_date_var, width=12).pack(side=tk.LEFT)
         ttk.Button(expected, text="一键自动检查", command=self.run_auto_checks).pack(side=tk.LEFT, padx=(12, 0))
+        ttk.Button(expected, text="刷新预测目录和复制命令", command=self.refresh_latest_paths_and_commands).pack(side=tk.LEFT, padx=(8, 0))
         return page
 
     def _build_auto_page(self) -> ttk.Frame:
         page = self._page()
+        canvas = tk.Canvas(page, highlightthickness=0)
+        vbar = ttk.Scrollbar(page, orient=tk.VERTICAL, command=canvas.yview)
+        canvas.configure(yscrollcommand=vbar.set)
+        vbar.pack(side=tk.RIGHT, fill=tk.Y)
+        canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        body = ttk.Frame(canvas)
+        canvas_window = canvas.create_window((0, 0), window=body, anchor=tk.NW)
+
+        def _on_body_configure(_event=None):
+            canvas.configure(scrollregion=canvas.bbox("all"))
+
+        def _on_canvas_configure(event):
+            canvas.itemconfigure(canvas_window, width=event.width)
+
+        def _on_mousewheel(event):
+            canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+
+        body.bind("<Configure>", _on_body_configure)
+        canvas.bind("<Configure>", _on_canvas_configure)
+        canvas.bind("<Enter>", lambda _event: canvas.bind_all("<MouseWheel>", _on_mousewheel))
+        canvas.bind("<Leave>", lambda _event: canvas.unbind_all("<MouseWheel>"))
+
+        page = body
         ttk.Label(page, text="自动检查", font=("Microsoft YaHei UI", 13, "bold")).pack(anchor=tk.W)
         ttk.Label(page, text="只读检查：不下载、不训练、不下单。").pack(anchor=tk.W, pady=(4, 12))
         columns = ("item", "status", "detail")
-        self.auto_tree = ttk.Treeview(page, columns=columns, show="headings", height=10)
+        tree_box = ttk.Frame(page)
+        tree_box.pack(fill=tk.BOTH, expand=False)
+        self.auto_tree = ttk.Treeview(tree_box, columns=columns, show="headings", height=8)
         self.auto_tree.heading("item", text="检查项")
         self.auto_tree.heading("status", text="状态")
         self.auto_tree.heading("detail", text="详情")
-        self.auto_tree.column("item", width=180)
-        self.auto_tree.column("status", width=90)
-        self.auto_tree.column("detail", width=720)
-        self.auto_tree.pack(fill=tk.X)
+        self.auto_tree.column("item", width=180, stretch=False)
+        self.auto_tree.column("status", width=90, stretch=False)
+        self.auto_tree.column("detail", width=1350, stretch=False)
+        tree_y = ttk.Scrollbar(tree_box, orient=tk.VERTICAL, command=self.auto_tree.yview)
+        tree_x = ttk.Scrollbar(tree_box, orient=tk.HORIZONTAL, command=self.auto_tree.xview)
+        self.auto_tree.configure(yscrollcommand=tree_y.set, xscrollcommand=tree_x.set)
+        self.auto_tree.grid(row=0, column=0, sticky="nsew")
+        tree_y.grid(row=0, column=1, sticky="ns")
+        tree_x.grid(row=1, column=0, sticky="ew")
+        tree_box.rowconfigure(0, weight=1)
+        tree_box.columnconfigure(0, weight=1)
+        self.auto_tree.bind("<Double-1>", self.show_auto_detail)
         self._reload_auto_tree()
+        ttk.Label(page, text="提示：详情太长时可拖动表格底部横向滚动条；双击某一行可查看完整详情。", foreground="#555555").pack(anchor=tk.W, pady=(6, 0))
         ttk.Button(page, text="刷新自动检查", command=self.run_auto_checks).pack(anchor=tk.W, pady=(10, 0))
 
         help_box = ttk.LabelFrame(page, text="这两个检查项怎么刷新")
@@ -328,6 +431,7 @@ class LiveExecutionChecklistGui:
                 "最新预测目录：LightGBM 模型训练/预测后的输出目录，里面必须有 predictions.csv 和 summary.json。"
                 "界面显示的 run 是这次模型运行的目录名；预测区间是 predictions.csv 覆盖的交易日期范围。"
                 "日常刷新建议只预测最近 30 个可用交易日，速度更快。"
+                "如果本地日线已经到今天，但预测目录仍是昨天，需要先复制并运行下面的“刷新预测命令”。"
             ),
             wraplength=940,
             justify=tk.LEFT,
@@ -336,13 +440,14 @@ class LiveExecutionChecklistGui:
             help_box,
             "复制刷新预测命令",
             self.prediction_command_var,
-            "不填 --end-date 时，脚本会自动使用本地 510300.SH 日线已有的最新交易日。",
+            "不填 --end-date 时，脚本会自动识别本地日线已有的最新交易日。",
         )
         ttk.Label(
             help_box,
             text=(
                 "小资金报告：基于上面的 predictions.csv，再按 40 万资金、最小买入金额、最多持仓数和现金保留比例做近似实盘约束回测。"
                 "它不会重新训练模型，只是把最新预测结果转换成小资金可执行组合报告。"
+                "复制命令时会自动使用磁盘上最新的预测目录；但如果最新预测目录还没更新到今天，请先刷新预测。"
             ),
             wraplength=940,
             justify=tk.LEFT,
@@ -351,9 +456,22 @@ class LiveExecutionChecklistGui:
             help_box,
             "复制刷新小资金报告命令",
             self.small_capital_command_var,
-            "先点“刷新自动检查”，让 APP 找到最新预测目录；复制时会自动带入该目录。",
+            "先点“刷新命令/路径”或“刷新自动检查”，让 APP 重新扫描最新预测目录；复制时会自动带入该目录。",
         )
-        return page
+        ttk.Button(help_box, text="刷新命令/路径", command=self.refresh_latest_paths_and_commands).pack(anchor=tk.W, padx=8, pady=(0, 8))
+        daily_box = ttk.LabelFrame(page, text="本地日线失败怎么办")
+        daily_box.pack(fill=tk.X, pady=(12, 0))
+        ttk.Label(
+            daily_box,
+            text=(
+                "APP 会同时检查 000001.SZ、600000.SH 和 510300.SH 的本地 1d 日线，判断最近交易日是否已落地。"
+                "运行 check_missing_market_data.py 会尝试补 A股数据，但如果 MiniQMT 数据源暂时还没有写入当天日线，APP 仍会显示最新日期停在上一交易日。"
+                "这种情况下可以等待数据落地后再刷新，或把“预期最新交易日”改成当前已落地的最新日期后重新检查。"
+            ),
+            wraplength=980,
+            justify=tk.LEFT,
+        ).pack(anchor=tk.W, padx=8, pady=8)
+        return canvas.master
 
     def _command_row(self, parent: ttk.Frame, button_text: str, command_var: tk.StringVar, note: str) -> None:
         ttk.Label(parent, text=note, wraplength=940, justify=tk.LEFT).pack(anchor=tk.W, padx=8, pady=(6, 2))
@@ -362,6 +480,28 @@ class LiveExecutionChecklistGui:
         entry = ttk.Entry(row, textvariable=command_var)
         entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
         ttk.Button(row, text=button_text, command=lambda var=command_var: self.copy_command(var.get())).pack(side=tk.LEFT, padx=(8, 0))
+
+    def show_auto_detail(self, _event=None) -> None:
+        if not hasattr(self, "auto_tree"):
+            return
+        selection = self.auto_tree.selection()
+        if not selection:
+            return
+        values = self.auto_tree.item(selection[0], "values")
+        if len(values) < 3:
+            return
+        messagebox.showinfo("自动检查详情", "检查项：{}\n状态：{}\n\n{}".format(values[0], values[1], values[2]))
+
+    def show_weekly_detail(self, _event=None) -> None:
+        if not hasattr(self, "weekly_tree"):
+            return
+        selection = self.weekly_tree.selection()
+        if not selection:
+            return
+        values = self.weekly_tree.item(selection[0], "values")
+        if len(values) < 3:
+            return
+        messagebox.showinfo("周度准备详情", "检查项：{}\n状态：{}\n\n{}".format(values[0], values[1], values[2]))
 
     def _build_risk_page(self) -> ttk.Frame:
         page = self._page()
@@ -478,7 +618,19 @@ class LiveExecutionChecklistGui:
         ttk.Button(toolbar, text="打开候选CSV", command=lambda: self.open_path(self.candidate_path_var.get())).pack(side=tk.LEFT, padx=(8, 0))
         ttk.Label(toolbar, textvariable=self.candidate_status_var).pack(side=tk.LEFT, padx=(12, 0))
 
-        columns = ("candidate_date", "code", "name", "action_hint", "shares", "value", "pred_return_5d", "pred_up_prob", "risk_score")
+        columns = (
+            "candidate_date",
+            "code",
+            "name",
+            "action_hint",
+            "shares",
+            "value",
+            "old_value",
+            "trade_value",
+            "pred_return_5d",
+            "pred_up_prob",
+            "risk_score",
+        )
         self.candidate_tree = ttk.Treeview(page, columns=columns, show="headings", height=22)
         headings = {
             "candidate_date": "候选日期",
@@ -487,6 +639,8 @@ class LiveExecutionChecklistGui:
             "action_hint": "动作提示",
             "shares": "股数",
             "value": "目标市值",
+            "old_value": "原市值",
+            "trade_value": "交易金额",
             "pred_return_5d": "预测5日收益",
             "pred_up_prob": "上涨概率",
             "risk_score": "风险分",
@@ -498,6 +652,8 @@ class LiveExecutionChecklistGui:
             "action_hint": 90,
             "shares": 80,
             "value": 95,
+            "old_value": 95,
+            "trade_value": 95,
             "pred_return_5d": 100,
             "pred_up_prob": 90,
             "risk_score": 80,
@@ -601,6 +757,8 @@ class LiveExecutionChecklistGui:
                 str(row.get("action_hint", "")),
                 self._format_number(row.get("shares", ""), 0),
                 self._format_number(row.get("value", ""), 0),
+                self._format_number(row.get("old_value", ""), 0),
+                self._format_number(row.get("trade_value", ""), 0),
                 self._format_percent(row.get("pred_return_5d", "")),
                 self._format_percent(row.get("pred_up_prob", "")),
                 self._format_number(row.get("risk_score", ""), 1),
@@ -648,14 +806,53 @@ class LiveExecutionChecklistGui:
         candidates = holdings[holdings["trade_date"] == selected_date].copy()
         candidates["candidate_date"] = selected_date
         candidates["action_hint"] = "保留/持有"
+        candidates["old_value"] = pd.NA
+        candidates["trade_value"] = pd.NA
         if trades_path.exists():
             trades = pd.read_csv(trades_path, encoding="utf-8-sig")
             if not trades.empty:
                 trades["trade_date"] = trades["trade_date"].astype(str)
                 latest_trades = trades[trades["trade_date"] == selected_date]
-                action_map = dict(zip(latest_trades["code"], latest_trades["action"]))
+                action_map = {
+                    row["code"]: describe_trade_action(row)
+                    for _, row in latest_trades.iterrows()
+                }
                 candidates["action_hint"] = candidates["code"].map(action_map).fillna("保留/持有")
-                candidates["action_hint"] = candidates["action_hint"].replace({"buy": "新增/加仓", "sell": "减仓/卖出"})
+                trade_value_map = dict(zip(latest_trades["code"], latest_trades["trade_value"]))
+                old_value_map = dict(zip(latest_trades["code"], latest_trades["old_value"]))
+                candidates["trade_value"] = candidates["code"].map(trade_value_map)
+                candidates["old_value"] = candidates["code"].map(old_value_map)
+
+                clear_sells = latest_trades[
+                    (latest_trades["action"].astype(str) == "sell")
+                    & (latest_trades["new_value"].fillna(0).astype(float).abs() < 1e-6)
+                ].copy()
+                if not clear_sells.empty:
+                    name_lookup = (
+                        holdings.sort_values("trade_date")
+                        .drop_duplicates("code", keep="last")
+                        .set_index("code")["name"]
+                        .to_dict()
+                        if "name" in holdings.columns
+                        else {}
+                    )
+                    sell_rows = pd.DataFrame(
+                        {
+                            "trade_date": selected_date,
+                            "candidate_date": selected_date,
+                            "code": clear_sells["code"],
+                            "name": clear_sells["code"].map(name_lookup).fillna(""),
+                            "action_hint": clear_sells.apply(describe_trade_action, axis=1),
+                            "shares": 0,
+                            "value": clear_sells["new_value"],
+                            "old_value": clear_sells["old_value"],
+                            "trade_value": clear_sells["trade_value"],
+                            "pred_return_5d": pd.NA,
+                            "pred_up_prob": pd.NA,
+                            "risk_score": pd.NA,
+                        }
+                    )
+                    candidates = pd.concat([candidates, sell_rows], ignore_index=True)
         candidates["source_label"] = selected["source_label"]
         candidates["experiment_name"] = selected["experiment_name"]
         candidates["experiment_name_cn"] = selected["experiment_name_cn"]
@@ -667,6 +864,8 @@ class LiveExecutionChecklistGui:
             "action_hint",
             "shares",
             "value",
+            "old_value",
+            "trade_value",
             "pred_return_5d",
             "pred_up_prob",
             "risk_score",
@@ -812,7 +1011,7 @@ class LiveExecutionChecklistGui:
             scan_start = (datetime.now() - timedelta(days=30)).strftime("%Y%m%d")
             data = xtdata.get_local_data(
                 field_list=[],
-                stock_list=[REFERENCE_STOCK],
+                stock_list=DAILY_CHECK_STOCKS,
                 period="1d",
                 start_time=scan_start,
                 end_time=max(expected, today),
@@ -820,32 +1019,53 @@ class LiveExecutionChecklistGui:
                 dividend_type="front",
                 fill_data=False,
             )
-            frame = data.get(REFERENCE_STOCK) if isinstance(data, dict) else None
-            if isinstance(frame, pd.DataFrame) and not frame.empty:
-                dates = [normalize_date(idx) for idx in frame.index]
-                dates = [date for date in dates if date]
-                latest = max(dates) if dates else ""
-                if latest >= expected:
-                    return {"status": "通过", "detail": "{} 本地日线最新为 {}，已满足预期 {}。".format(REFERENCE_STOCK, latest, expected), "path": ""}
-                if self._is_intraday_today(expected):
-                    return {
-                        "status": "通过",
-                        "detail": "{} 本地日线最新为 {}；当前未到 {}，不要求今日 {} 日线。".format(
-                            REFERENCE_STOCK,
-                            latest or "-",
-                            DAILY_DATA_READY_TIME,
-                            expected,
-                        ),
-                        "path": "",
-                    }
-                if self._is_weekend_today(expected):
-                    return {
-                        "status": "通过",
-                        "detail": "{} 本地日线最新为 {}；今天是周末，不要求 {} 日线。".format(REFERENCE_STOCK, latest or "-", expected),
-                        "path": "",
-                    }
-                return {"status": "失败", "detail": "{} 本地日线最新为 {}，未达到预期 {}。".format(REFERENCE_STOCK, latest or "-", expected), "path": ""}
-            return {"status": "失败", "detail": "{} 最近 30 天未读取到本地日线。".format(REFERENCE_STOCK), "path": ""}
+            latest_by_code: dict[str, str] = {}
+            complete_latest_by_code: dict[str, str] = {}
+            if isinstance(data, dict):
+                for code in DAILY_CHECK_STOCKS:
+                    frame = data.get(code)
+                    if isinstance(frame, pd.DataFrame) and not frame.empty:
+                        dates = [normalize_date(idx) for idx in frame.index]
+                        dates = [date for date in dates if date]
+                        if dates:
+                            latest_by_code[code] = max(dates)
+                        complete_latest = latest_complete_daily_date(frame)
+                        if complete_latest:
+                            complete_latest_by_code[code] = complete_latest
+            if not latest_by_code:
+                return {"status": "失败", "detail": "{} 最近 30 天都未读取到本地日线。".format(", ".join(DAILY_CHECK_STOCKS)), "path": ""}
+
+            ready_codes = [code for code, latest in complete_latest_by_code.items() if latest >= expected]
+            raw_detail = ", ".join("{}={}".format(code, latest) for code, latest in latest_by_code.items())
+            complete_detail = ", ".join("{}={}".format(code, latest) for code, latest in complete_latest_by_code.items()) or "无"
+            detail = "探针原始最新日期: {}；完整日线最新日期(volume/amount>0): {}".format(raw_detail, complete_detail)
+            if ready_codes:
+                return {
+                    "status": "通过",
+                    "detail": "{}；至少一个高流动性探针已有完整日线并满足预期 {}，通过探针: {}。".format(detail, expected, ", ".join(ready_codes)),
+                    "path": "",
+                }
+            latest = max(complete_latest_by_code.values()) if complete_latest_by_code else max(latest_by_code.values())
+            if self._is_intraday_today(expected):
+                return {
+                    "status": "通过",
+                    "detail": "{}；当前未到 {}，不要求今日 {} 日线。".format(detail, DAILY_DATA_READY_TIME, expected),
+                    "path": "",
+                }
+            if self._is_weekend_today(expected):
+                return {
+                    "status": "通过",
+                    "detail": "{}；今天是周末，不要求 {} 日线。".format(detail, expected),
+                    "path": "",
+                }
+            return {
+                    "status": "失败",
+                    "detail": (
+                        "{}；未达到预期 {}。当前可能已经出现 {} 的日期行，但如果 volume/amount 为 0，仍视为未完整落地。"
+                        "check_missing_market_data.py 主要检查是否有日期行，可能不会把这种占位行判为失败。建议等待完整日线落地，或把“预期最新交易日”改成完整日线最新日期 {} 后重新检查。"
+                    ).format(detail, expected, ", ".join(DAILY_CHECK_STOCKS), latest or "-"),
+                    "path": "",
+                }
         except Exception as exc:
             return {"status": "失败", "detail": "{}: {}".format(type(exc).__name__, exc), "path": ""}
 
@@ -876,16 +1096,21 @@ class LiveExecutionChecklistGui:
             return {"status": "失败", "detail": "{}: {}".format(type(exc).__name__, exc), "path": str(FINANCIAL_CACHE)}
 
     def _check_prediction_run(self) -> dict:
-        run_dir = latest_dir_with_file(PREDICTION_ROOT, "summary.json")
+        run_dir = latest_prediction_run_dir()
         if run_dir is None:
             return {"status": "失败", "detail": "未找到模型输出目录。", "path": str(PREDICTION_ROOT)}
-        predictions = run_dir / "predictions.csv"
-        if not predictions.exists():
-            return {"status": "失败", "detail": "最新目录缺少 predictions.csv: {}".format(run_dir), "path": str(run_dir)}
         try:
             summary = json.loads((run_dir / "summary.json").read_text(encoding="utf-8"))
             if not summary.get("use_financial_factors"):
                 detail = "最新模型输出不是财务增强版；请重新运行带 --use-financial-factors 的 LightGBM。目录：{}".format(run_dir.name)
+                return {"status": "失败", "detail": detail, "path": str(run_dir)}
+            expected = normalize_date(self.expected_date_var.get())
+            prediction_end = normalize_date(summary.get("actual_prediction_end_date") or summary.get("end_date"))
+            if expected and prediction_end and prediction_end < expected:
+                detail = (
+                    "最新模型输出目录={}，但预测只到 {}，当前预期最新交易日是 {}。"
+                    "请先运行“刷新预测命令”，生成 end{} 或更晚的预测目录，然后再刷新小资金报告。"
+                ).format(run_dir.name, prediction_end, expected, expected)
                 return {"status": "失败", "detail": detail, "path": str(run_dir)}
             detail = "模型输出目录={}；预测文件=predictions.csv；可用预测日期 {} 至 {}。如需更新，请重新运行 LightGBM 训练/预测脚本。".format(
                 run_dir.name,
@@ -930,6 +1155,28 @@ class LiveExecutionChecklistGui:
         self.prediction_command_var.set(self._prediction_refresh_command())
         self.small_capital_command_var.set(self._small_capital_refresh_command())
         self._reload_auto_tree()
+        self._reload_weekly_tree()
+        self._refresh_overall_status()
+
+    def refresh_latest_paths_and_commands(self) -> None:
+        prediction_result = self._check_prediction_run()
+        self.auto_status_vars["prediction_run"].set(prediction_result.get("status", "未知"))
+        self.auto_detail_vars["prediction_run"].set(prediction_result.get("detail", ""))
+        self.auto_path_vars["prediction_run"].set(prediction_result.get("path", ""))
+
+        small_result = self._check_small_capital()
+        self.auto_status_vars["small_capital"].set(small_result.get("status", "未知"))
+        self.auto_detail_vars["small_capital"].set(small_result.get("detail", ""))
+        self.auto_path_vars["small_capital"].set(small_result.get("path", ""))
+
+        self.prediction_command_var.set(self._prediction_refresh_command())
+        self.small_capital_command_var.set(self._small_capital_refresh_command())
+        self._reload_auto_tree()
+        self._reload_weekly_tree()
+        self._refresh_overall_status()
+
+    def _on_manual_check_changed(self) -> None:
+        self._reload_weekly_tree()
         self._refresh_overall_status()
 
     def _reload_auto_tree(self) -> None:
@@ -945,6 +1192,14 @@ class LiveExecutionChecklistGui:
         }
         for key, label in labels.items():
             self.auto_tree.insert("", tk.END, values=(label, self.auto_status_vars[key].get(), self.auto_detail_vars[key].get()))
+
+    def _reload_weekly_tree(self) -> None:
+        if not hasattr(self, "weekly_tree"):
+            return
+        self.weekly_tree.delete(*self.weekly_tree.get_children())
+        rows = getattr(self, "weekly_rows", [])
+        for label, key in rows:
+            self.weekly_tree.insert("", tk.END, values=(label, self.auto_status_vars[key].get(), self.auto_detail_vars[key].get()))
 
     def _refresh_risk(self) -> None:
         try:
@@ -1039,15 +1294,20 @@ class LiveExecutionChecklistGui:
             "available_cash": account.get("available_cash", ""),
             "holding_count": account.get("holding_count", ""),
         }
+        self._last_saved_snapshot = self._collect_comparable_state()
         if show_message:
             messagebox.showinfo("已保存", "已保存本周执行清单状态。")
 
     def on_close(self) -> None:
         if self.close_auto_save_var.get():
             try:
-                self.save_state(show_message=False)
+                if self.has_unsaved_changes():
+                    self.save_state(show_message=False)
             finally:
                 self.root.destroy()
+            return
+        if not self.has_unsaved_changes():
+            self.root.destroy()
             return
         choice = messagebox.askyesnocancel("关闭前保存", "是否保存当前填写内容？")
         if choice is None:
@@ -1096,6 +1356,16 @@ class LiveExecutionChecklistGui:
                 "action": self.action_note_text.get("1.0", tk.END).strip() if self.action_note_text is not None else "",
             },
         }
+
+    def _collect_comparable_state(self) -> dict:
+        data = self._collect_state()
+        data.pop("last_saved_at", None)
+        return data
+
+    def has_unsaved_changes(self) -> bool:
+        if self._last_saved_snapshot is None:
+            return True
+        return self._collect_comparable_state() != self._last_saved_snapshot
 
     def _append_weekly_log(self, data: dict) -> None:
         exists = WEEKLY_LOG.exists()
