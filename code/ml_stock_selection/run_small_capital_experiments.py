@@ -498,14 +498,52 @@ def write_latest_candidates(output_dir: Path, summary_df: pd.DataFrame) -> Path:
         candidates = holdings[holdings["trade_date"] == latest_date].copy()
         candidates["candidate_date"] = latest_date
         candidates["action_hint"] = "保留/持有"
+        candidates["old_value"] = pd.NA
+        candidates["trade_value"] = pd.NA
         if trades_path.exists():
             trades = pd.read_csv(trades_path, encoding="utf-8-sig")
             if not trades.empty:
                 trades["trade_date"] = trades["trade_date"].astype(str)
                 latest_trades = trades[trades["trade_date"] == latest_date]
-                action_map = dict(zip(latest_trades["code"], latest_trades["action"]))
+                action_map = {
+                    row["code"]: describe_trade_action(row)
+                    for _, row in latest_trades.iterrows()
+                }
                 candidates["action_hint"] = candidates["code"].map(action_map).fillna("保留/持有")
-                candidates["action_hint"] = candidates["action_hint"].replace({"buy": "新增/加仓", "sell": "减仓/卖出"})
+                trade_value_map = dict(zip(latest_trades["code"], latest_trades["trade_value"]))
+                old_value_map = dict(zip(latest_trades["code"], latest_trades["old_value"]))
+                candidates["trade_value"] = candidates["code"].map(trade_value_map)
+                candidates["old_value"] = candidates["code"].map(old_value_map)
+                clear_sells = latest_trades[
+                    (latest_trades["action"].astype(str) == "sell")
+                    & (latest_trades["new_value"].fillna(0).astype(float).abs() < 1e-6)
+                ].copy()
+                if not clear_sells.empty:
+                    name_lookup = (
+                        holdings.sort_values("trade_date")
+                        .drop_duplicates("code", keep="last")
+                        .set_index("code")["name"]
+                        .to_dict()
+                        if "name" in holdings.columns
+                        else {}
+                    )
+                    sell_rows = pd.DataFrame(
+                        {
+                            "trade_date": latest_date,
+                            "candidate_date": latest_date,
+                            "code": clear_sells["code"],
+                            "name": clear_sells["code"].map(name_lookup).fillna(""),
+                            "action_hint": clear_sells.apply(describe_trade_action, axis=1),
+                            "shares": 0,
+                            "value": clear_sells["new_value"],
+                            "old_value": clear_sells["old_value"],
+                            "trade_value": clear_sells["trade_value"],
+                            "pred_return_5d": pd.NA,
+                            "pred_up_prob": pd.NA,
+                            "risk_score": pd.NA,
+                        }
+                    )
+                    candidates = pd.concat([candidates, sell_rows], ignore_index=True)
         candidates["source_label"] = selected["source_label"]
         candidates["experiment_name"] = selected["experiment_name"]
         candidates["experiment_name_cn"] = selected["experiment_name_cn"]
@@ -518,6 +556,8 @@ def write_latest_candidates(output_dir: Path, summary_df: pd.DataFrame) -> Path:
                 "action_hint",
                 "shares",
                 "value",
+                "old_value",
+                "trade_value",
                 "pred_return_5d",
                 "pred_up_prob",
                 "risk_score",
@@ -530,6 +570,17 @@ def write_latest_candidates(output_dir: Path, summary_df: pd.DataFrame) -> Path:
     path = output_dir / "latest_candidates.csv"
     candidates.to_csv(path, index=False, encoding="utf-8-sig")
     return path
+
+
+def describe_trade_action(row: pd.Series) -> str:
+    action = str(row.get("action", "")).strip()
+    old_value = float(row.get("old_value", 0.0) or 0.0)
+    new_value = float(row.get("new_value", 0.0) or 0.0)
+    if action == "buy":
+        return "新增买入" if old_value <= 1e-6 else "加仓后持有"
+    if action == "sell":
+        return "清仓卖出" if new_value <= 1e-6 else "减仓后持有"
+    return action or "保留/持有"
 
 
 def main() -> int:
