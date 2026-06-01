@@ -1,0 +1,396 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>长鑫科技打新市值准备方案</title>
+  <style>
+    :root {
+      --bg: #f6f7f9;
+      --panel: #ffffff;
+      --text: #17202a;
+      --muted: #64748b;
+      --line: #d9e0e8;
+      --accent: #1769aa;
+      --accent-soft: #e8f2fb;
+      --warn: #9a5b00;
+      --warn-soft: #fff4db;
+      --ok: #146c43;
+      --ok-soft: #e7f5ee;
+      --danger: #9f1d1d;
+      --danger-soft: #fdecec;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", Arial, sans-serif;
+      line-height: 1.6;
+    }
+
+    .page {
+      max-width: 1040px;
+      margin: 0 auto;
+      padding: 28px 18px 48px;
+    }
+
+    header {
+      padding: 18px 0 20px;
+      border-bottom: 1px solid var(--line);
+      margin-bottom: 22px;
+    }
+
+    h1 {
+      margin: 0 0 8px;
+      font-size: clamp(26px, 4vw, 40px);
+      line-height: 1.15;
+      letter-spacing: 0;
+    }
+
+    h2 {
+      margin: 0 0 14px;
+      font-size: 22px;
+      letter-spacing: 0;
+    }
+
+    h3 {
+      margin: 0 0 8px;
+      font-size: 17px;
+      letter-spacing: 0;
+    }
+
+    p {
+      margin: 0 0 12px;
+    }
+
+    .muted {
+      color: var(--muted);
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(12, 1fr);
+      gap: 16px;
+      margin-bottom: 18px;
+    }
+
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 18px;
+      box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+    }
+
+    .span-12 {
+      grid-column: span 12;
+    }
+
+    .span-7 {
+      grid-column: span 7;
+    }
+
+    .span-5 {
+      grid-column: span 5;
+    }
+
+    .decision {
+      border-left: 5px solid var(--accent);
+    }
+
+    .tag-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin: 12px 0 2px;
+    }
+
+    .tag {
+      display: inline-flex;
+      align-items: center;
+      min-height: 30px;
+      padding: 4px 10px;
+      border-radius: 999px;
+      background: var(--accent-soft);
+      color: #0f4f82;
+      font-size: 14px;
+      font-weight: 600;
+    }
+
+    .callout {
+      padding: 13px 14px;
+      border-radius: 8px;
+      margin: 12px 0;
+      border: 1px solid transparent;
+    }
+
+    .callout.ok {
+      background: var(--ok-soft);
+      color: var(--ok);
+      border-color: #b8e1ca;
+    }
+
+    .callout.warn {
+      background: var(--warn-soft);
+      color: var(--warn);
+      border-color: #f5d38a;
+    }
+
+    .callout.danger {
+      background: var(--danger-soft);
+      color: var(--danger);
+      border-color: #f2b8b8;
+    }
+
+    .steps {
+      display: grid;
+      gap: 10px;
+      margin-top: 10px;
+    }
+
+    .step {
+      display: grid;
+      grid-template-columns: 38px 1fr;
+      gap: 12px;
+      align-items: start;
+      padding: 12px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fbfcfd;
+    }
+
+    .num {
+      display: inline-grid;
+      place-items: center;
+      width: 30px;
+      height: 30px;
+      border-radius: 50%;
+      background: var(--accent);
+      color: #fff;
+      font-weight: 700;
+      font-size: 14px;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 14px;
+      overflow-wrap: anywhere;
+    }
+
+    th,
+    td {
+      padding: 10px 8px;
+      border-bottom: 1px solid var(--line);
+      text-align: left;
+      vertical-align: top;
+    }
+
+    th {
+      color: #334155;
+      background: #f8fafc;
+      font-weight: 700;
+    }
+
+    .rank {
+      font-weight: 700;
+      color: var(--accent);
+    }
+
+    .avoid {
+      color: var(--danger);
+      font-weight: 700;
+    }
+
+    .buy {
+      color: var(--ok);
+      font-weight: 700;
+    }
+
+    ul {
+      margin: 8px 0 0 20px;
+      padding: 0;
+    }
+
+    li {
+      margin: 6px 0;
+    }
+
+    a {
+      color: var(--accent);
+      text-decoration: none;
+    }
+
+    a:hover {
+      text-decoration: underline;
+    }
+
+    .footer {
+      color: var(--muted);
+      font-size: 13px;
+      margin-top: 22px;
+      padding-top: 18px;
+      border-top: 1px solid var(--line);
+    }
+
+    @media (max-width: 820px) {
+      .span-7,
+      .span-5 {
+        grid-column: span 12;
+      }
+
+      .page {
+        padding: 18px 12px 36px;
+      }
+
+      .panel {
+        padding: 14px;
+      }
+
+      table {
+        font-size: 13px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <header>
+      <h1>长鑫科技打新市值准备方案</h1>
+      <p class="muted">版本时间：2026-05-29 盘中方案。目标是准备沪市市值参与科创板新股申购，不是做短线追涨。</p>
+      <div class="tag-row">
+        <span class="tag">核心目标：沪市市值</span>
+        <span class="tag">资金规模：1-2 万</span>
+        <span class="tag">策略风格：低波动底仓</span>
+      </div>
+    </header>
+
+    <section class="grid">
+      <div class="panel decision span-12">
+        <h2>今天的执行结论</h2>
+        <p><strong>今天适合先买一半，不适合满仓追。</strong></p>
+        <p>如果尾盘没有明显拉升，优先买 <strong>1 手 600941 中国移动</strong>。剩余资金留到下周一或周二，看回落后再补 <strong>601939 建设银行</strong>。</p>
+        <div class="callout ok">
+          可执行动作：今天先买 1 手中国移动，开始累计沪市市值；不要今天追长江电力和中国神华。
+        </div>
+      </div>
+
+      <div class="panel span-7">
+        <h2>买入节奏</h2>
+        <div class="steps">
+          <div class="step">
+            <div class="num">1</div>
+            <div>
+              <h3>今天 2026-05-29</h3>
+              <p>如果 <strong>600941 中国移动</strong> 尾盘没有突然拉升，买 1 手。它一手接近 1 万元，刚好作为第一笔沪市底仓。</p>
+            </div>
+          </div>
+          <div class="step">
+            <div class="num">2</div>
+            <div>
+              <h3>下周一或周二</h3>
+              <p>如果 <strong>601939 建设银行</strong> 回到 10.05 元附近或以下，补第二笔。这样总市值接近 1.5-2 万，更稳地累计 20 日日均市值。</p>
+            </div>
+          </div>
+          <div class="step">
+            <div class="num">3</div>
+            <div>
+              <h3>后续持有</h3>
+              <p>在长鑫科技正式申购前，原则上不要频繁换股。重点是保持沪市非限售 A 股市值，而不是每天追热点。</p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="panel span-5">
+        <h2>为什么要现在开始</h2>
+        <p>科创板新股申购额度按 <strong>T-2 前 20 个交易日的日均沪市市值</strong>计算。越早开始持有，越早累计日均市值。</p>
+        <div class="callout warn">
+          如果只买 1 万，最好连续持有接近 20 个交易日；如果买 2 万，持有约 10 个交易日后，20 日日均值才大约接近 1 万。
+        </div>
+        <p class="muted">注意：ETF、基金、债券不计入新股申购市值。</p>
+      </div>
+    </section>
+
+    <section class="grid">
+      <div class="panel span-12">
+        <h2>候选股票排序</h2>
+        <table>
+          <thead>
+            <tr>
+              <th>优先级</th>
+              <th>股票</th>
+              <th>今天判断</th>
+              <th>适合的买法</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td class="rank">1</td>
+              <td>600941 中国移动</td>
+              <td class="buy">今天可买第一笔</td>
+              <td>尾盘不冲高就买 1 手；若冲高，等下周回到 98 元附近或以下。</td>
+            </tr>
+            <tr>
+              <td class="rank">2</td>
+              <td>601939 建设银行</td>
+              <td class="buy">适合做第二笔</td>
+              <td>等 10.05 元附近或以下补仓；价格灵活，适合把总市值补到 1.5-2 万。</td>
+            </tr>
+            <tr>
+              <td class="rank">3</td>
+              <td>600900 长江电力</td>
+              <td class="avoid">今天不追</td>
+              <td>是好底仓，但今天接近 20 日高点，等回落或横盘再考虑。</td>
+            </tr>
+            <tr>
+              <td class="rank">4</td>
+              <td>601088 中国神华</td>
+              <td class="avoid">今天不追</td>
+              <td>分红高，但煤炭周期属性更强；今天涨幅偏大，不适合打新底仓追买。</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="grid">
+      <div class="panel span-7">
+        <h2>操作检查清单</h2>
+        <ul>
+          <li>确认账户已经开通科创板权限。</li>
+          <li>确认买入的是沪市 A 股，不是 ETF 或基金。</li>
+          <li>申购日前，保持至少 1 万以上沪市日均市值。</li>
+          <li>正式发行公告出来后，看申购代码、申购日、发行价、网上申购上限。</li>
+          <li>中签后 T+2 日要留足缴款资金，避免弃购。</li>
+        </ul>
+      </div>
+
+      <div class="panel span-5">
+        <h2>风险边界</h2>
+        <div class="callout danger">
+          这不是收益最大化方案，而是为了打新配市值的低波动方案。不要因为长鑫科技热门，就去追半导体题材或已经大涨的高股息股。
+        </div>
+        <p>如果长鑫科技申购日明显提前，就优先保证市值连续性；如果申购日还很远，可以更耐心地等回落补第二笔。</p>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h2>参考信息</h2>
+      <p>长鑫科技目前为科创板 IPO 过会阶段，尚需关注注册、发行公告和正式申购日。</p>
+      <ul>
+        <li><a href="https://edu.sse.com.cn/tib/qa/" target="_blank" rel="noopener">上交所科创板投资者教育问答</a></li>
+        <li><a href="https://star.sse.com.cn/ipo/home/qa/inline/c/5463456.shtml" target="_blank" rel="noopener">上交所新股网上发行实施细则问答</a></li>
+        <li><a href="https://finance.sina.com.cn/jjxw/2026-05-28/doc-inhzmihu0270490.shtml" target="_blank" rel="noopener">长鑫科技科创板 IPO 过会报道</a></li>
+      </ul>
+    </section>
+
+    <p class="footer">本页面用于记录个人操作计划和规则核对，不构成投资收益承诺。行情会变化，买入前应再看一次实时价格。</p>
+  </main>
+</body>
+</html>
