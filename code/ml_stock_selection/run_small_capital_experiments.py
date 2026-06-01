@@ -476,13 +476,7 @@ def write_latest_candidates(output_dir: Path, summary_df: pd.DataFrame) -> Path:
     if summary_df.empty:
         raise RuntimeError("summary_df 为空，无法生成 latest_candidates.csv")
 
-    preferred = summary_df[summary_df["experiment_name"] == DEFAULT_LIVE_EXPERIMENT_NAME]
-    if preferred.empty:
-        ranked = summary_df.sort_values(["max_drawdown_with_cost", "total_return_with_cost"], ascending=[False, False])
-        selected = ranked.iloc[0]
-    else:
-        selected = preferred.iloc[0]
-
+    selected = select_live_summary_row(summary_df)
     experiment_dir = output_dir / str(selected["source_label"]) / str(selected["experiment_name"])
     holdings_path = experiment_dir / "holdings.csv"
     trades_path = experiment_dir / "trades.csv"
@@ -572,6 +566,142 @@ def write_latest_candidates(output_dir: Path, summary_df: pd.DataFrame) -> Path:
     return path
 
 
+def select_live_summary_row(summary_df: pd.DataFrame) -> pd.Series:
+    preferred = summary_df[summary_df["experiment_name"] == DEFAULT_LIVE_EXPERIMENT_NAME]
+    if preferred.empty:
+        ranked = summary_df.sort_values(["max_drawdown_with_cost", "total_return_with_cost"], ascending=[False, False])
+        return ranked.iloc[0]
+    return preferred.iloc[0]
+
+
+def next_weekday_yyyymmdd(trade_date: str) -> str:
+    next_day = pd.Timestamp(str(trade_date)) + pd.Timedelta(days=1)
+    while next_day.weekday() >= 5:
+        next_day += pd.Timedelta(days=1)
+    return next_day.strftime("%Y%m%d")
+
+
+def write_next_execution_plan(
+    output_dir: Path,
+    summary_df: pd.DataFrame,
+    filtered_cache: Dict[Tuple[str, str], pd.DataFrame],
+) -> Path:
+    if summary_df.empty:
+        raise RuntimeError("summary_df 为空，无法生成 next_execution_plan.csv")
+
+    selected = select_live_summary_row(summary_df)
+    experiment_dir = output_dir / str(selected["source_label"]) / str(selected["experiment_name"])
+    holdings_path = experiment_dir / "holdings.csv"
+    daily_path = experiment_dir / "daily_nav.csv"
+    if not holdings_path.exists():
+        raise FileNotFoundError("未找到持仓候选文件: {}".format(holdings_path))
+
+    holdings = pd.read_csv(holdings_path, encoding="utf-8-sig")
+    if holdings.empty:
+        plan = pd.DataFrame()
+    else:
+        holdings["trade_date"] = holdings["trade_date"].astype(str)
+        signal_date = str(holdings["trade_date"].max())
+        execution_date = next_weekday_yyyymmdd(signal_date)
+        latest_holdings = holdings[holdings["trade_date"] == signal_date].copy()
+        current_positions = {
+            str(row["code"]): {"shares": float(row.get("shares", 0.0) or 0.0), "value": float(row.get("value", 0.0) or 0.0), "price": 0.0}
+            for _, row in latest_holdings.iterrows()
+        }
+        daily = pd.read_csv(daily_path, encoding="utf-8-sig") if daily_path.exists() else pd.DataFrame()
+        if not daily.empty and "portfolio_value" in daily.columns:
+            daily["trade_date"] = daily["trade_date"].astype(str)
+            latest_daily = daily[daily["trade_date"] == signal_date]
+            portfolio_value = float(latest_daily["portfolio_value"].iloc[0]) if not latest_daily.empty else sum(item["value"] for item in current_positions.values())
+        else:
+            portfolio_value = sum(item["value"] for item in current_positions.values())
+
+        source_label = str(selected["source_label"])
+        filter_name = str(selected["filter_name"])
+        day_df = filtered_cache[(source_label, filter_name)]
+        day_df = day_df[day_df["trade_date"].astype(str) == signal_date].copy()
+        ranked = rank_candidates(day_df, float(selected["max_risk_score"]) if "max_risk_score" in selected else 70.0)
+        rebalance = should_rebalance(execution_date, str(selected["rebalance_frequency"]), bool(current_positions), current_week(signal_date))
+        if rebalance:
+            selected_codes = select_codes(ranked, set(current_positions), int(selected["max_holdings"]), int(selected["hold_rank_buffer"]))
+            target_positions = build_target_positions(
+                day_df,
+                selected_codes,
+                portfolio_value,
+                float(selected["cash_reserve_rate"]),
+                float(selected["min_trade_amount"]),
+            )
+        else:
+            target_positions = current_positions
+
+        target_rows = build_holding_rows(execution_date, target_positions, day_df)
+        plan = pd.DataFrame(target_rows)
+        plan["signal_date"] = signal_date
+        plan["candidate_date"] = execution_date
+        plan["action_hint"] = "保留/持有"
+        plan["old_value"] = pd.NA
+        plan["trade_value"] = pd.NA
+
+        trade_rows = pd.DataFrame(build_trade_rows(execution_date, current_positions, target_positions, ranked, 0.0))
+        if not trade_rows.empty:
+            action_map = {row["code"]: describe_trade_action(row) for _, row in trade_rows.iterrows()}
+            plan["action_hint"] = plan["code"].map(action_map).fillna("保留/持有")
+            plan["old_value"] = plan["code"].map(dict(zip(trade_rows["code"], trade_rows["old_value"])))
+            plan["trade_value"] = plan["code"].map(dict(zip(trade_rows["code"], trade_rows["trade_value"])))
+            clear_sells = trade_rows[
+                (trade_rows["action"].astype(str) == "sell")
+                & (trade_rows["new_value"].fillna(0).astype(float).abs() < 1e-6)
+            ].copy()
+            if not clear_sells.empty:
+                name_lookup = holdings.sort_values("trade_date").drop_duplicates("code", keep="last").set_index("code")["name"].to_dict()
+                sell_rows = pd.DataFrame(
+                    {
+                        "trade_date": execution_date,
+                        "signal_date": signal_date,
+                        "candidate_date": execution_date,
+                        "code": clear_sells["code"],
+                        "name": clear_sells["code"].map(name_lookup).fillna(""),
+                        "shares": 0,
+                        "value": clear_sells["new_value"],
+                        "pred_return_5d": pd.NA,
+                        "pred_up_prob": pd.NA,
+                        "risk_score": pd.NA,
+                        "action_hint": clear_sells.apply(describe_trade_action, axis=1),
+                        "old_value": clear_sells["old_value"],
+                        "trade_value": clear_sells["trade_value"],
+                    }
+                )
+                plan = pd.concat([plan, sell_rows], ignore_index=True)
+
+        plan["source_label"] = selected["source_label"]
+        plan["experiment_name"] = selected["experiment_name"]
+        plan["experiment_name_cn"] = selected["experiment_name_cn"]
+        plan["source_run_dir"] = selected["source_run_dir"]
+        plan = plan[
+            [
+                "signal_date",
+                "candidate_date",
+                "code",
+                "name",
+                "action_hint",
+                "shares",
+                "value",
+                "old_value",
+                "trade_value",
+                "pred_return_5d",
+                "pred_up_prob",
+                "risk_score",
+                "experiment_name",
+                "experiment_name_cn",
+                "source_run_dir",
+            ]
+        ].sort_values(["action_hint", "value"], ascending=[True, False])
+
+    path = output_dir / "next_execution_plan.csv"
+    plan.to_csv(path, index=False, encoding="utf-8-sig")
+    return path
+
+
 def describe_trade_action(row: pd.Series) -> str:
     action = str(row.get("action", "")).strip()
     old_value = float(row.get("old_value", 0.0) or 0.0)
@@ -603,6 +733,7 @@ def main() -> int:
     print("初始资金: {:.0f}, 单只最小买入金额: {:.0f}".format(args.capital, args.min_trade_amount))
 
     summaries: List[Dict[str, Any]] = []
+    filtered_cache_by_label_filter: Dict[Tuple[str, str], pd.DataFrame] = {}
     for label, run_dir in zip(labels, run_dirs):
         predictions_path = run_dir / "predictions.csv"
         if not predictions_path.exists():
@@ -616,6 +747,7 @@ def main() -> int:
         for filter_name in filter_names:
             filtered_df, filter_daily = apply_financial_filter(pred_df, filter_name)
             filtered_cache[filter_name] = filtered_df
+            filtered_cache_by_label_filter[(label, filter_name)] = filtered_df
             print(
                 "{} {}: avg_candidates={:.1f}, pass_rate={:.2%}".format(
                     label,
@@ -660,12 +792,14 @@ def main() -> int:
     summary_path = output_dir / "small_capital_summary.csv"
     report_path = output_dir / "small_capital_report.md"
     candidates_path = write_latest_candidates(output_dir, summary_df)
+    next_plan_path = write_next_execution_plan(output_dir, summary_df, filtered_cache_by_label_filter)
     summary_df.to_csv(summary_path, index=False, encoding="utf-8-sig")
     report_path.write_text(build_report(summary_df, output_dir), encoding="utf-8")
     print_title("完成")
     print("summary: {}".format(summary_path))
     print("report: {}".format(report_path))
     print("latest_candidates: {}".format(candidates_path))
+    print("next_execution_plan: {}".format(next_plan_path))
     return 0
 
 
