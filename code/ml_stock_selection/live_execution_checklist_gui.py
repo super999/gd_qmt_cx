@@ -6,11 +6,12 @@ import csv
 import json
 import os
 import queue
+import re
 import threading
 from datetime import datetime, timedelta
 from pathlib import Path
 import tkinter as tk
-from tkinter import messagebox, ttk
+from tkinter import filedialog, messagebox, ttk
 
 import pandas as pd
 
@@ -24,9 +25,11 @@ SMALL_CAPITAL_ROOT = MODULE_DIR / "outputs" / "small_capital_experiments"
 CHECKLIST_DOC = ROOT_DIR / "报告" / "策略设计" / "LightGBM小资金实盘执行清单.md"
 STATE_JSON = OUTPUT_DIR / "checklist_state.json"
 WEEKLY_LOG = OUTPUT_DIR / "weekly_checklist_log.csv"
+EXECUTION_RECORDS_CSV = OUTPUT_DIR / "execution_records.csv"
 
 DEFAULT_STRATEGY_ID = "bp_value_q70_max8_cash25_buffer24"
 DEFAULT_STRATEGY_CN = "低PB防守过滤；最多持有8只；至少保留25%现金；每周调仓；旧持仓前24名保留"
+NEXT_PLAN_LABEL = "下一计划"
 DAILY_CHECK_STOCKS = ["000001.SZ", "600000.SH", "510300.SH"]
 DAILY_DATA_READY_TIME = "15:30"
 PREDICTION_REFRESH_COMMAND = (
@@ -164,6 +167,21 @@ class LiveExecutionChecklistGui:
         self.candidate_path_var = tk.StringVar(value="")
         self.candidate_date_var = tk.StringVar(value="最新")
         self.candidate_date_combo: ttk.Combobox | None = None
+        self.execution_candidate_date_combo: ttk.Combobox | None = None
+        self.execution_records: list[dict] = list(self.state.get("execution_records", []))
+        self.execution_tree: ttk.Treeview | None = None
+        self.execution_selected_id: str | None = None
+        self.exec_date_var = tk.StringVar(value=today_yyyymmdd())
+        self.exec_code_var = tk.StringVar(value="")
+        self.exec_name_var = tk.StringVar(value="")
+        self.exec_plan_action_var = tk.StringVar(value="")
+        self.exec_plan_shares_var = tk.StringVar(value="")
+        self.exec_plan_value_var = tk.StringVar(value="")
+        self.exec_actual_action_var = tk.StringVar(value="买入")
+        self.exec_actual_shares_var = tk.StringVar(value="")
+        self.exec_actual_price_var = tk.StringVar(value="")
+        self.exec_actual_amount_var = tk.StringVar(value="")
+        self.exec_reason_var = tk.StringVar(value="")
         account = self.state.get("account", {})
         self.start_capital_var = tk.StringVar(value=str(account.get("start_capital", "400000")))
         self.high_watermark_var = tk.StringVar(value=str(account.get("high_watermark", "400000")))
@@ -611,7 +629,7 @@ class LiveExecutionChecklistGui:
         toolbar = ttk.Frame(page)
         toolbar.pack(fill=tk.X, pady=(0, 8))
         ttk.Button(toolbar, text="刷新候选股", command=self.load_candidates).pack(side=tk.LEFT)
-        ttk.Label(toolbar, text="候选日期").pack(side=tk.LEFT, padx=(10, 4))
+        ttk.Label(toolbar, text="日期").pack(side=tk.LEFT, padx=(10, 4))
         self.candidate_date_combo = ttk.Combobox(toolbar, textvariable=self.candidate_date_var, width=12, state="readonly")
         self.candidate_date_combo.pack(side=tk.LEFT)
         self.candidate_date_combo.bind("<<ComboboxSelected>>", lambda _event: self.load_candidates())
@@ -633,7 +651,7 @@ class LiveExecutionChecklistGui:
         )
         self.candidate_tree = ttk.Treeview(page, columns=columns, show="headings", height=22)
         headings = {
-            "candidate_date": "候选日期",
+            "candidate_date": "日期",
             "code": "代码",
             "name": "名称",
             "action_hint": "动作提示",
@@ -670,13 +688,147 @@ class LiveExecutionChecklistGui:
         ttk.Label(page, text="执行记录", font=("Microsoft YaHei UI", 13, "bold")).pack(anchor=tk.W)
         ttk.Label(
             page,
-            text="在券商/QMT 手动买卖后，回到这里记录实际动作。没有交易也要写明原因。",
+            text=(
+                "在券商/QMT 手动买卖后，回到这里记录实际动作。"
+                "建议先点“从候选股生成计划行”，再补实际成交股数、成交价和没成交原因。"
+            ),
             wraplength=980,
             justify=tk.LEFT,
         ).pack(anchor=tk.W, pady=(4, 8))
-        ttk.Button(page, text="插入执行记录模板", command=self.insert_action_template).pack(anchor=tk.W, pady=(0, 6))
-        self.action_note_text = tk.Text(page, height=22, wrap=tk.WORD)
-        self.action_note_text.pack(fill=tk.BOTH, expand=True)
+        toolbar = ttk.Frame(page)
+        toolbar.pack(fill=tk.X, pady=(0, 6))
+        ttk.Label(toolbar, text="候选日期").pack(side=tk.LEFT)
+        self.execution_candidate_date_combo = ttk.Combobox(
+            toolbar,
+            textvariable=self.candidate_date_var,
+            width=12,
+            state="readonly",
+        )
+        self.execution_candidate_date_combo.pack(side=tk.LEFT, padx=(6, 8))
+        ttk.Button(toolbar, text="刷新日期", command=self.refresh_candidate_date_choices).pack(side=tk.LEFT)
+        ttk.Button(toolbar, text="从候选股生成计划行", command=self.generate_execution_rows_from_candidates).pack(side=tk.LEFT)
+        ttk.Button(toolbar, text="从剪贴板导入成交", command=self.import_execution_trades_from_clipboard).pack(side=tk.LEFT, padx=(8, 0))
+        ttk.Button(toolbar, text="导入成交文本", command=self.open_trade_text_import_dialog).pack(side=tk.LEFT, padx=(8, 0))
+        ttk.Button(toolbar, text="导入成交CSV", command=self.import_execution_trades_from_csv).pack(side=tk.LEFT, padx=(8, 0))
+        ttk.Button(toolbar, text="查看导入说明", command=self.show_execution_import_help).pack(side=tk.LEFT, padx=(8, 0))
+        ttk.Button(toolbar, text="新增空白记录", command=self.add_blank_execution_record).pack(side=tk.LEFT, padx=(8, 0))
+        ttk.Button(toolbar, text="删除选中记录", command=self.delete_selected_execution_record).pack(side=tk.LEFT, padx=(8, 0))
+        ttk.Button(toolbar, text="清空全部记录", command=self.clear_execution_records).pack(side=tk.LEFT, padx=(8, 0))
+        ttk.Label(
+            page,
+            text=(
+                "填写原则：优先在券商成交查询里复制成交表，点“从剪贴板导入成交”批量回填。"
+                "少量缺漏再点表格行，在表单里手动补充，最后点右上角保存。"
+            ),
+            foreground="#555555",
+            wraplength=980,
+            justify=tk.LEFT,
+        ).pack(anchor=tk.W, pady=(0, 6))
+
+        form = ttk.LabelFrame(page, text="选中记录 / 新增记录表单")
+        form.pack(fill=tk.X, pady=(0, 8))
+        for column, weight in enumerate([0, 1, 0, 1, 0, 1]):
+            form.columnconfigure(column, weight=weight)
+        fields = [
+            ("日期", self.exec_date_var, 0, 0, 12),
+            ("代码", self.exec_code_var, 0, 2, 14),
+            ("名称", self.exec_name_var, 0, 4, 14),
+            ("计划股数", self.exec_plan_shares_var, 1, 2, 12),
+            ("计划市值", self.exec_plan_value_var, 1, 4, 12),
+        ]
+        for label, variable, row, column, width in fields:
+            ttk.Label(form, text=label).grid(row=row, column=column, padx=(8, 4), pady=5, sticky=tk.W)
+            ttk.Entry(form, textvariable=variable, width=width).grid(row=row, column=column + 1, padx=(0, 8), pady=5, sticky=tk.W)
+        ttk.Label(form, text="系统动作").grid(row=1, column=0, padx=(8, 4), pady=5, sticky=tk.W)
+        ttk.Combobox(
+            form,
+            textvariable=self.exec_plan_action_var,
+            values=["新增买入", "加仓后持有", "减仓后持有", "清仓卖出", "保留/持有", "人工买入", "非模型候选"],
+            width=14,
+            state="normal",
+        ).grid(row=1, column=1, padx=(0, 8), pady=5, sticky=tk.W)
+        ttk.Label(form, text="实际动作").grid(row=2, column=0, padx=(8, 4), pady=5, sticky=tk.W)
+        ttk.Combobox(
+            form,
+            textvariable=self.exec_actual_action_var,
+            values=["买入", "卖出", "持有", "跳过", "未成交"],
+            width=12,
+            state="readonly",
+        ).grid(row=2, column=1, padx=(0, 8), pady=5, sticky=tk.W)
+        ttk.Label(form, text="实际股数").grid(row=2, column=2, padx=(8, 4), pady=5, sticky=tk.W)
+        ttk.Entry(form, textvariable=self.exec_actual_shares_var, width=12).grid(row=2, column=3, padx=(0, 8), pady=5, sticky=tk.W)
+        ttk.Label(form, text="成交均价").grid(row=2, column=4, padx=(8, 4), pady=5, sticky=tk.W)
+        ttk.Entry(form, textvariable=self.exec_actual_price_var, width=12).grid(row=2, column=5, padx=(0, 8), pady=5, sticky=tk.W)
+        ttk.Label(form, text="成交金额").grid(row=3, column=0, padx=(8, 4), pady=5, sticky=tk.W)
+        ttk.Entry(form, textvariable=self.exec_actual_amount_var, width=14).grid(row=3, column=1, padx=(0, 8), pady=5, sticky=tk.W)
+        ttk.Label(form, text="原因/备注").grid(row=3, column=2, padx=(8, 4), pady=5, sticky=tk.W)
+        ttk.Entry(form, textvariable=self.exec_reason_var).grid(row=3, column=3, columnspan=3, padx=(0, 8), pady=5, sticky="ew")
+        action_row = ttk.Frame(form)
+        action_row.grid(row=4, column=0, columnspan=6, sticky=tk.W, padx=8, pady=(4, 8))
+        ttk.Button(action_row, text="更新选中记录", command=self.update_selected_execution_record).pack(side=tk.LEFT)
+        ttk.Button(action_row, text="按股数和均价计算金额", command=self.calculate_execution_amount).pack(side=tk.LEFT, padx=(8, 0))
+        ttk.Button(action_row, text="清空表单", command=self.clear_execution_form).pack(side=tk.LEFT, padx=(8, 0))
+
+        table_box = ttk.Frame(page)
+        table_box.pack(fill=tk.BOTH, expand=True)
+        columns = (
+            "date",
+            "code",
+            "name",
+            "plan_action",
+            "plan_shares",
+            "plan_value",
+            "actual_action",
+            "actual_shares",
+            "actual_price",
+            "actual_amount",
+            "reason",
+        )
+        headings = {
+            "date": "日期",
+            "code": "代码",
+            "name": "名称",
+            "plan_action": "系统动作",
+            "plan_shares": "计划股数",
+            "plan_value": "计划市值",
+            "actual_action": "实际动作",
+            "actual_shares": "实际股数",
+            "actual_price": "成交均价",
+            "actual_amount": "成交金额",
+            "reason": "原因/备注",
+        }
+        widths = {
+            "date": 85,
+            "code": 95,
+            "name": 95,
+            "plan_action": 90,
+            "plan_shares": 80,
+            "plan_value": 90,
+            "actual_action": 80,
+            "actual_shares": 80,
+            "actual_price": 80,
+            "actual_amount": 90,
+            "reason": 240,
+        }
+        self.execution_tree = ttk.Treeview(table_box, columns=columns, show="headings", height=12)
+        for column in columns:
+            self.execution_tree.heading(column, text=headings[column])
+            self.execution_tree.column(column, width=widths[column], anchor=tk.CENTER, stretch=column == "reason")
+        execution_y = ttk.Scrollbar(table_box, orient=tk.VERTICAL, command=self.execution_tree.yview)
+        execution_x = ttk.Scrollbar(table_box, orient=tk.HORIZONTAL, command=self.execution_tree.xview)
+        self.execution_tree.configure(yscrollcommand=execution_y.set, xscrollcommand=execution_x.set)
+        self.execution_tree.grid(row=0, column=0, sticky="nsew")
+        execution_y.grid(row=0, column=1, sticky="ns")
+        execution_x.grid(row=1, column=0, sticky="ew")
+        table_box.rowconfigure(0, weight=1)
+        table_box.columnconfigure(0, weight=1)
+        self.execution_tree.bind("<<TreeviewSelect>>", self.on_execution_record_selected)
+
+        ttk.Label(page, text="补充说明（可选）").pack(anchor=tk.W, pady=(8, 4))
+        self.action_note_text = tk.Text(page, height=5, wrap=tk.WORD)
+        self.action_note_text.pack(fill=tk.BOTH, expand=False)
+        self.refresh_candidate_date_choices(show_error=False)
+        self.reload_execution_tree()
         return page
 
     def _build_files_page(self) -> ttk.Frame:
@@ -797,11 +949,52 @@ class LiveExecutionChecklistGui:
             return pd.DataFrame(), "holdings.csv 为空: {}".format(holdings_path)
         holdings["trade_date"] = holdings["trade_date"].astype(str)
         dates = sorted(holdings["trade_date"].dropna().astype(str).unique(), reverse=True)
-        self._set_candidate_date_values(dates)
+        plan_path = run_dir / "next_execution_plan.csv"
+        plan = pd.DataFrame()
+        plan_dates: list[str] = []
+        if plan_path.exists():
+            plan = pd.read_csv(plan_path, encoding="utf-8-sig")
+            if not plan.empty and "candidate_date" in plan.columns:
+                plan["candidate_date"] = plan["candidate_date"].astype(str)
+                plan_dates = sorted(plan["candidate_date"].dropna().astype(str).unique(), reverse=True)
+        date_values = ([NEXT_PLAN_LABEL] if plan_dates else []) + dates
+        self._set_candidate_date_values(date_values)
         selected_date = self.candidate_date_var.get().strip()
-        if selected_date not in dates:
+        if plan_dates and selected_date not in dates:
+            selected_date = NEXT_PLAN_LABEL
+            self.candidate_date_var.set(selected_date)
+        elif selected_date not in dates:
             selected_date = dates[0]
             self.candidate_date_var.set(selected_date)
+
+        if selected_date == NEXT_PLAN_LABEL and plan_dates:
+            execution_date = plan_dates[0]
+            candidates = plan[plan["candidate_date"] == execution_date].copy()
+            candidates["candidate_date"] = candidates["candidate_date"].astype(str)
+            candidates["source_label"] = selected["source_label"]
+            candidates["experiment_name"] = selected["experiment_name"]
+            candidates["experiment_name_cn"] = selected["experiment_name_cn"]
+            candidates["source_run_dir"] = selected["source_run_dir"]
+            columns = [
+                "candidate_date",
+                "code",
+                "name",
+                "action_hint",
+                "shares",
+                "value",
+                "old_value",
+                "trade_value",
+                "pred_return_5d",
+                "pred_up_prob",
+                "risk_score",
+                "experiment_name",
+                "experiment_name_cn",
+                "source_run_dir",
+            ]
+            existing_columns = [column for column in columns if column in candidates.columns]
+            candidates = candidates[existing_columns].sort_values(["action_hint", "value"], ascending=[True, False])
+            signal_date = str(plan["signal_date"].iloc[0]) if "signal_date" in plan.columns else ""
+            return candidates, "下一交易日执行计划；信号日={}；小资金run={}".format(signal_date, run_dir.name)
 
         candidates = holdings[holdings["trade_date"] == selected_date].copy()
         candidates["candidate_date"] = selected_date
@@ -878,9 +1071,17 @@ class LiveExecutionChecklistGui:
         return candidates, "可回看 {} 个候选日期；小资金run={}".format(len(dates), run_dir.name)
 
     def _set_candidate_date_values(self, dates: list[str]) -> None:
-        if self.candidate_date_combo is None:
-            return
-        self.candidate_date_combo["values"] = dates
+        if self.candidate_date_combo is not None:
+            self.candidate_date_combo["values"] = dates
+        if self.execution_candidate_date_combo is not None:
+            self.execution_candidate_date_combo["values"] = dates
+
+    def refresh_candidate_date_choices(self, show_error: bool = True) -> None:
+        try:
+            self._build_candidate_view()
+        except Exception as exc:
+            if show_error:
+                messagebox.showerror("刷新失败", "读取候选日期失败：{}: {}".format(type(exc).__name__, exc))
 
     def _format_number(self, value, digits: int) -> str:
         try:
@@ -959,6 +1160,664 @@ class LiveExecutionChecklistGui:
             ]
         )
         self.run_note_text.insert(tk.END, ("\n" if self.run_note_text.get("1.0", tk.END).strip() else "") + "\n".join(lines))
+
+    def insert_candidate_execution_template(self) -> None:
+        if self.action_note_text is None:
+            return
+        try:
+            df, status_text = self._build_candidate_view()
+        except Exception as exc:
+            messagebox.showerror("生成失败", "读取候选股失败：{}: {}".format(type(exc).__name__, exc))
+            return
+        if df.empty:
+            messagebox.showwarning("没有候选股", "未读取到候选股。请先在“候选股”页刷新候选股，或先刷新小资金报告。")
+            return
+
+        lines = self._candidate_execution_template_lines(df, status_text)
+        separator = "\n\n" if self.action_note_text.get("1.0", tk.END).strip() else ""
+        self.action_note_text.insert(tk.END, separator + "\n".join(lines))
+
+    def generate_execution_rows_from_candidates(self) -> None:
+        try:
+            df, _status_text = self._build_candidate_view()
+        except Exception as exc:
+            messagebox.showerror("生成失败", "读取候选股失败：{}: {}".format(type(exc).__name__, exc))
+            return
+        if df.empty:
+            messagebox.showwarning("没有候选股", "未读取到候选股。请先在“候选股”页刷新候选股，或先刷新小资金报告。")
+            return
+
+        existing_keys = {
+            (
+                str(record.get("date", "")),
+                str(record.get("code", "")),
+                str(record.get("plan_action", "")),
+            )
+            for record in self.execution_records
+        }
+        added = 0
+        for _, row in df.iterrows():
+            action = str(row.get("action_hint", "")).strip() or "保留/持有"
+            date = str(row.get("candidate_date", "")).strip() or today_yyyymmdd()
+            code = str(row.get("code", "")).strip()
+            key = (date, code, action)
+            if not code or key in existing_keys:
+                continue
+            self.execution_records.append(self._execution_record_from_candidate(row))
+            existing_keys.add(key)
+            added += 1
+        self.reload_execution_tree()
+        if added:
+            messagebox.showinfo("已生成", "已从候选股生成 {} 条待填执行记录。已有记录不会被覆盖。".format(added))
+        else:
+            messagebox.showinfo("无需新增", "候选股对应的执行记录已经存在，没有新增。")
+
+    def import_execution_trades_from_clipboard(self) -> None:
+        try:
+            text = self.root.clipboard_get()
+        except Exception as exc:
+            messagebox.showerror("读取剪贴板失败", "{}: {}".format(type(exc).__name__, exc))
+            return
+        self.import_execution_trades_from_text(text)
+
+    def open_trade_text_import_dialog(self) -> None:
+        dialog = tk.Toplevel(self.root)
+        dialog.title("导入成交文本")
+        dialog.geometry("860x520")
+        dialog.transient(self.root)
+        dialog.grab_set()
+
+        ttk.Label(
+            dialog,
+            text=(
+                "把东方财富成交查询截图 OCR 后的文本粘到下面。支持带表头，也支持简化格式：\n"
+                "成交日期 证券代码 证券名称 操作 成交均价 成交数量 成交金额"
+            ),
+            justify=tk.LEFT,
+        ).pack(anchor=tk.W, padx=10, pady=(10, 6))
+        text_box = tk.Text(dialog, height=18, wrap=tk.NONE)
+        text_box.pack(fill=tk.BOTH, expand=True, padx=10, pady=(0, 8))
+        sample = (
+            "2026-05-27 688525 伯维存储 买入 319.00 500 159500.00\n"
+            "2026-05-27 601001 晋控煤业 买入 17.05 8500 144925.00"
+        )
+
+        buttons = ttk.Frame(dialog)
+        buttons.pack(fill=tk.X, padx=10, pady=(0, 10))
+
+        def paste_clipboard() -> None:
+            try:
+                value = self.root.clipboard_get()
+            except Exception as exc:
+                messagebox.showerror("读取剪贴板失败", "{}: {}".format(type(exc).__name__, exc), parent=dialog)
+                return
+            text_box.delete("1.0", tk.END)
+            text_box.insert("1.0", value)
+
+        def insert_sample() -> None:
+            text_box.delete("1.0", tk.END)
+            text_box.insert("1.0", sample)
+
+        def import_text() -> None:
+            imported = self.import_execution_trades_from_text(text_box.get("1.0", tk.END), parent=dialog)
+            if imported:
+                dialog.destroy()
+
+        ttk.Button(buttons, text="粘贴剪贴板", command=paste_clipboard).pack(side=tk.LEFT)
+        ttk.Button(buttons, text="插入示例", command=insert_sample).pack(side=tk.LEFT, padx=(8, 0))
+        ttk.Button(buttons, text="导入", command=import_text).pack(side=tk.RIGHT)
+        ttk.Button(buttons, text="取消", command=dialog.destroy).pack(side=tk.RIGHT, padx=(0, 8))
+
+    def show_execution_import_help(self) -> None:
+        dialog = tk.Toplevel(self.root)
+        dialog.title("执行记录使用说明")
+        dialog.geometry("920x680")
+        dialog.transient(self.root)
+
+        text_box = tk.Text(dialog, wrap=tk.WORD)
+        text_box.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar = ttk.Scrollbar(dialog, orient=tk.VERTICAL, command=text_box.yview)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        text_box.configure(yscrollcommand=scrollbar.set)
+        text_box.insert("1.0", self._execution_import_help_text())
+        text_box.configure(state=tk.DISABLED)
+
+    def _execution_import_help_text(self) -> str:
+        return (
+            "执行记录页使用说明\n"
+            "\n"
+            "一、推荐流程\n"
+            "1. 先选择“候选日期”。\n"
+            "2. 点击“从候选股生成计划行”，生成模型建议的计划记录。\n"
+            "3. 在券商/东方财富客户端完成实际买卖。\n"
+            "4. 回到本页，用下面三种方式之一导入真实成交。\n"
+            "5. 检查表格里“实际动作、实际股数、成交均价、成交金额”是否正确。\n"
+            "6. 少量没识别的行，点选表格行后在上方表单手动补充，再点“更新选中记录”。\n"
+            "7. 最后点击右上角“保存当前填写内容”。\n"
+            "\n"
+            "二、按钮说明\n"
+            "候选日期：选择要生成计划行的候选日期，可以回看昨天、前天或历史候选。\n"
+            "刷新日期：重新扫描小资金报告里可用的候选日期。\n"
+            "从候选股生成计划行：把模型建议的买入、卖出、持有记录生成到下方表格。已有记录不会覆盖。\n"
+            "从剪贴板导入成交：适合券商客户端能直接 Ctrl+C 复制成交表格的情况。\n"
+            "导入成交文本：适合东方财富无法复制网格时，先截图 OCR，再把 OCR 文本粘进窗口导入。\n"
+            "导入成交CSV：适合券商客户端能导出成交查询 CSV 的情况。\n"
+            "新增空白记录：手动记录模型外交易或特殊交易。\n"
+            "删除选中记录：删除当前选中的一行。\n"
+            "清空全部记录：清空结构化执行记录，不会清空补充说明。\n"
+            "\n"
+            "三、字段说明\n"
+            "系统动作：模型/小资金组合给出的建议，例如 新增买入、加仓后持有、减仓后持有、清仓卖出、保留/持有。\n"
+            "实际动作：你在券商里真实做了什么，例如 买入、卖出、持有、跳过、未成交。\n"
+            "计划股数/计划市值：模型建议，不代表真实成交。\n"
+            "实际股数/成交均价/成交金额：券商真实成交结果，应以成交查询为准。\n"
+            "原因/备注：记录未成交、跳过、人工调整、价格不合适、模型外交易等原因。\n"
+            "\n"
+            "四、OCR 文本格式\n"
+            "如果东方财富不能复制网格，可以截图后 OCR。导入文本建议整理成每行一笔成交：\n"
+            "\n"
+            "成交日期 证券代码 证券名称 操作 成交均价 成交数量 成交金额\n"
+            "2026-05-27 688525 伯维存储 买入 319.00 500 159500.00\n"
+            "2026-05-27 601001 晋控煤业 买入 17.05 8500 144925.00\n"
+            "\n"
+            "也支持带表头的制表符或 CSV 文本，只要字段名包含：成交日期、证券代码、证券名称、操作、成交均价、成交数量、成交金额。\n"
+            "\n"
+            "五、匹配规则\n"
+            "APP 会按 成交日期 + 股票代码 + 买入/卖出方向 匹配已有计划行。\n"
+            "匹配成功：自动回填实际成交信息。\n"
+            "匹配失败：自动新增一行，系统动作显示为“券商成交导入”，你可以手动修改原因。\n"
+            "\n"
+            "六、注意事项\n"
+            "导入后一定要人工核对金额和股数，OCR 可能把 0、8、6、9 识别错。\n"
+            "本页只做记录，不会自动下单，也不会修改券商账户。\n"
+            "保存后会写入 checklist_state.json，并额外输出 execution_records.csv，便于以后复盘。"
+        )
+
+    def import_execution_trades_from_csv(self) -> None:
+        path = filedialog.askopenfilename(
+            title="选择成交 CSV 文件",
+            filetypes=[("CSV 文件", "*.csv"), ("文本文件", "*.txt"), ("所有文件", "*.*")],
+        )
+        if not path:
+            return
+        try:
+            text = self._read_text_file_with_fallback(Path(path))
+        except Exception as exc:
+            messagebox.showerror("读取文件失败", "{}: {}".format(type(exc).__name__, exc))
+            return
+        self.import_execution_trades_from_text(text)
+
+    def _read_text_file_with_fallback(self, path: Path) -> str:
+        for encoding in ("utf-8-sig", "gbk", "utf-8"):
+            try:
+                return path.read_text(encoding=encoding)
+            except UnicodeDecodeError:
+                continue
+        return path.read_text()
+
+    def import_execution_trades_from_text(self, text: str, parent=None) -> bool:
+        trades = self._parse_trade_clipboard(text)
+        if not trades:
+            messagebox.showwarning(
+                "没有识别到成交",
+                "需要包含：成交日期、证券代码、证券名称、操作、成交均价、成交数量、成交金额。",
+                parent=parent,
+            )
+            return False
+        updated, added = self._merge_imported_trades(trades)
+        self.reload_execution_tree()
+        messagebox.showinfo(
+            "导入完成",
+            "识别成交 {} 条；回填已有记录 {} 条；新增记录 {} 条。".format(len(trades), updated, added),
+            parent=parent,
+        )
+        return True
+
+    def _parse_trade_clipboard(self, text: str) -> list[dict]:
+        rows = [self._split_clipboard_line(line) for line in text.splitlines() if line.strip()]
+        rows = [row for row in rows if row]
+        if not rows:
+            return []
+
+        header_map = self._trade_header_map(rows[0])
+        data_rows = rows[1:] if header_map else rows
+        trades: list[dict] = []
+        for row in data_rows:
+            trade = self._parse_trade_row(row, header_map)
+            if trade:
+                trades.append(trade)
+        return trades
+
+    def _split_clipboard_line(self, line: str) -> list[str]:
+        if "\t" in line:
+            return [part.strip() for part in line.split("\t")]
+        if "," in line:
+            try:
+                return [part.strip() for part in next(csv.reader([line]))]
+            except Exception:
+                pass
+        parts = [part.strip() for part in re.split(r"\s{2,}", line.strip()) if part.strip()]
+        if len(parts) <= 1:
+            parts = [part.strip() for part in re.split(r"\s+", line.strip()) if part.strip()]
+        return parts
+
+    def _trade_header_map(self, row: list[str]) -> dict[str, int]:
+        aliases = {
+            "date": ("成交日期", "日期"),
+            "code": ("证券代码", "代码"),
+            "name": ("证券名称", "名称"),
+            "action": ("操作", "买卖"),
+            "price": ("成交均价", "成交价格", "成交价"),
+            "shares": ("成交数量", "数量", "成交股数"),
+            "amount": ("成交金额", "金额"),
+        }
+        header: dict[str, int] = {}
+        for key, names in aliases.items():
+            for index, value in enumerate(row):
+                if value in names:
+                    header[key] = index
+                    break
+        return header if {"date", "code", "action", "price", "shares", "amount"}.issubset(header) else {}
+
+    def _parse_trade_row(self, row: list[str], header_map: dict[str, int]) -> dict | None:
+        try:
+            if header_map:
+                date = normalize_date(row[header_map["date"]])
+                code = self._format_security_code(row[header_map["code"]])
+                name = row[header_map["name"]].strip() if "name" in header_map and header_map["name"] < len(row) else ""
+                action = row[header_map["action"]].strip()
+                price = self._clean_number_text(row[header_map["price"]])
+                shares = self._clean_number_text(row[header_map["shares"]])
+                amount = self._clean_number_text(row[header_map["amount"]])
+            else:
+                if len(row) < 7:
+                    return None
+                date = normalize_date(row[0])
+                code = self._format_security_code(row[1])
+                name = row[2].strip()
+                action = row[3].strip()
+                price = self._clean_number_text(row[4])
+                shares = self._clean_number_text(row[5])
+                amount = self._clean_number_text(row[6])
+        except Exception:
+            return None
+        if not date or not self._compact_code(code) or action not in ("买入", "卖出"):
+            return None
+        return {
+            "date": date,
+            "code": code,
+            "name": name,
+            "actual_action": action,
+            "actual_price": price,
+            "actual_shares": shares,
+            "actual_amount": amount,
+        }
+
+    def _clean_number_text(self, value) -> str:
+        text = str(value).strip().replace(",", "")
+        return text
+
+    def _compact_code(self, value) -> str:
+        digits = "".join(ch for ch in str(value) if ch.isdigit())
+        return digits[:6] if len(digits) >= 6 else digits
+
+    def _format_security_code(self, value) -> str:
+        text = str(value).strip()
+        if "." in text:
+            return text
+        code = self._compact_code(text)
+        if len(code) != 6:
+            return text
+        suffix = ".SH" if code.startswith("6") else ".SZ"
+        return code + suffix
+
+    def _merge_imported_trades(self, trades: list[dict]) -> tuple[int, int]:
+        updated = 0
+        added = 0
+        used_record_ids: set[str] = set()
+        for trade in trades:
+            record = self._find_matching_execution_record(trade, used_record_ids)
+            if record is None:
+                self.execution_records.append(self._execution_record_from_trade(trade))
+                added += 1
+                continue
+            used_record_ids.add(str(record.get("id", "")))
+            record["date"] = trade["date"]
+            record["code"] = record.get("code") or trade["code"]
+            record["name"] = record.get("name") or trade["name"]
+            record["actual_action"] = trade["actual_action"]
+            record["actual_shares"] = trade["actual_shares"]
+            record["actual_price"] = trade["actual_price"]
+            record["actual_amount"] = trade["actual_amount"]
+            if not record.get("reason"):
+                record["reason"] = "券商成交导入"
+            updated += 1
+        return updated, added
+
+    def _find_matching_execution_record(self, trade: dict, used_record_ids: set[str]) -> dict | None:
+        trade_code = self._compact_code(trade.get("code", ""))
+        trade_date = normalize_date(trade.get("date", ""))
+        trade_action = str(trade.get("actual_action", ""))
+        candidates = []
+        for record in self.execution_records:
+            record_id = str(record.get("id", ""))
+            if record_id in used_record_ids:
+                continue
+            if normalize_date(record.get("date", "")) != trade_date:
+                continue
+            if self._compact_code(record.get("code", "")) != trade_code:
+                continue
+            actual_action = str(record.get("actual_action", ""))
+            plan_action = str(record.get("plan_action", ""))
+            score = 0
+            if actual_action == trade_action:
+                score += 3
+            if not actual_action:
+                score += 1
+            if trade_action == "买入" and plan_action in ("新增买入", "加仓后持有", "人工买入", "非模型候选"):
+                score += 2
+            if trade_action == "卖出" and plan_action in ("减仓后持有", "清仓卖出"):
+                score += 2
+            candidates.append((score, record))
+        if not candidates:
+            return None
+        candidates.sort(key=lambda item: item[0], reverse=True)
+        return candidates[0][1]
+
+    def _execution_record_from_trade(self, trade: dict) -> dict:
+        action = trade["actual_action"]
+        return {
+            "id": self._new_execution_record_id(),
+            "date": trade["date"],
+            "code": trade["code"],
+            "name": trade["name"],
+            "plan_action": "券商成交导入",
+            "plan_shares": "",
+            "plan_value": "",
+            "old_value": "",
+            "trade_value": "",
+            "actual_action": action,
+            "actual_shares": trade["actual_shares"],
+            "actual_price": trade["actual_price"],
+            "actual_amount": trade["actual_amount"],
+            "reason": "未匹配模型计划；券商成交导入",
+        }
+
+    def _execution_record_from_candidate(self, row: pd.Series) -> dict:
+        action = str(row.get("action_hint", "")).strip() or "保留/持有"
+        if action in ("新增买入", "加仓后持有"):
+            actual_action = "买入"
+        elif action in ("减仓后持有", "清仓卖出"):
+            actual_action = "卖出"
+        elif action == "保留/持有":
+            actual_action = "持有"
+        else:
+            actual_action = ""
+        return {
+            "id": self._new_execution_record_id(),
+            "date": str(row.get("candidate_date", "")).strip() or today_yyyymmdd(),
+            "code": str(row.get("code", "")).strip(),
+            "name": "" if pd.isna(row.get("name", "")) else str(row.get("name", "")).strip(),
+            "plan_action": action,
+            "plan_shares": self._format_number(row.get("shares", ""), 0),
+            "plan_value": self._format_number(row.get("value", ""), 0),
+            "old_value": self._format_number(row.get("old_value", ""), 0),
+            "trade_value": self._format_number(row.get("trade_value", ""), 0),
+            "actual_action": actual_action,
+            "actual_shares": "",
+            "actual_price": "",
+            "actual_amount": "",
+            "reason": "",
+        }
+
+    def _new_execution_record_id(self) -> str:
+        return "exec_{}_{}".format(datetime.now().strftime("%Y%m%d%H%M%S%f"), len(self.execution_records) + 1)
+
+    def _ensure_execution_record_ids(self) -> None:
+        for record in self.execution_records:
+            if not record.get("id"):
+                record["id"] = self._new_execution_record_id()
+
+    def reload_execution_tree(self) -> None:
+        if self.execution_tree is None:
+            return
+        self._ensure_execution_record_ids()
+        self.execution_tree.delete(*self.execution_tree.get_children())
+        for record in self.execution_records:
+            values = (
+                record.get("date", ""),
+                record.get("code", ""),
+                record.get("name", ""),
+                record.get("plan_action", ""),
+                record.get("plan_shares", ""),
+                record.get("plan_value", ""),
+                record.get("actual_action", ""),
+                record.get("actual_shares", ""),
+                record.get("actual_price", ""),
+                record.get("actual_amount", ""),
+                record.get("reason", ""),
+            )
+            self.execution_tree.insert("", tk.END, iid=record["id"], values=values)
+
+    def on_execution_record_selected(self, _event=None) -> None:
+        if self.execution_tree is None:
+            return
+        selection = self.execution_tree.selection()
+        if not selection:
+            return
+        record_id = str(selection[0])
+        record = self._find_execution_record(record_id)
+        if record is None:
+            return
+        self.execution_selected_id = record_id
+        self.exec_date_var.set(str(record.get("date", "")))
+        self.exec_code_var.set(str(record.get("code", "")))
+        self.exec_name_var.set(str(record.get("name", "")))
+        self.exec_plan_action_var.set(str(record.get("plan_action", "")))
+        self.exec_plan_shares_var.set(str(record.get("plan_shares", "")))
+        self.exec_plan_value_var.set(str(record.get("plan_value", "")))
+        self.exec_actual_action_var.set(str(record.get("actual_action", "")) or "买入")
+        self.exec_actual_shares_var.set(str(record.get("actual_shares", "")))
+        self.exec_actual_price_var.set(str(record.get("actual_price", "")))
+        self.exec_actual_amount_var.set(str(record.get("actual_amount", "")))
+        self.exec_reason_var.set(str(record.get("reason", "")))
+
+    def _find_execution_record(self, record_id: str) -> dict | None:
+        for record in self.execution_records:
+            if str(record.get("id", "")) == record_id:
+                return record
+        return None
+
+    def _execution_record_from_form(self, record_id: str | None = None) -> dict:
+        return {
+            "id": record_id or self._new_execution_record_id(),
+            "date": self.exec_date_var.get().strip() or today_yyyymmdd(),
+            "code": self.exec_code_var.get().strip(),
+            "name": self.exec_name_var.get().strip(),
+            "plan_action": self.exec_plan_action_var.get().strip(),
+            "plan_shares": self.exec_plan_shares_var.get().strip(),
+            "plan_value": self.exec_plan_value_var.get().strip(),
+            "actual_action": self.exec_actual_action_var.get().strip(),
+            "actual_shares": self.exec_actual_shares_var.get().strip(),
+            "actual_price": self.exec_actual_price_var.get().strip(),
+            "actual_amount": self.exec_actual_amount_var.get().strip(),
+            "reason": self.exec_reason_var.get().strip(),
+        }
+
+    def update_selected_execution_record(self) -> None:
+        if not self.execution_selected_id:
+            self.add_blank_execution_record()
+            return
+        record = self._find_execution_record(self.execution_selected_id)
+        if record is None:
+            self.add_blank_execution_record()
+            return
+        record.update(self._execution_record_from_form(self.execution_selected_id))
+        self.reload_execution_tree()
+        if self.execution_tree is not None:
+            self.execution_tree.selection_set(self.execution_selected_id)
+
+    def add_blank_execution_record(self) -> None:
+        record = self._execution_record_from_form()
+        if not record["code"] and not record["name"]:
+            record["date"] = record["date"] or today_yyyymmdd()
+            record["actual_action"] = record["actual_action"] or "买入"
+        self.execution_records.append(record)
+        self.execution_selected_id = record["id"]
+        self.reload_execution_tree()
+        if self.execution_tree is not None:
+            self.execution_tree.selection_set(record["id"])
+            self.execution_tree.see(record["id"])
+
+    def delete_selected_execution_record(self) -> None:
+        if self.execution_tree is None:
+            return
+        selection = self.execution_tree.selection()
+        if not selection:
+            messagebox.showinfo("未选择", "请先在表格里选中一条执行记录。")
+            return
+        record_id = str(selection[0])
+        self.execution_records = [record for record in self.execution_records if str(record.get("id", "")) != record_id]
+        self.execution_selected_id = None
+        self.clear_execution_form()
+        self.reload_execution_tree()
+
+    def clear_execution_records(self) -> None:
+        if not self.execution_records:
+            return
+        if messagebox.askyesno("清空确认", "确定清空全部结构化执行记录吗？补充说明不会被清空。"):
+            self.execution_records = []
+            self.execution_selected_id = None
+            self.clear_execution_form()
+            self.reload_execution_tree()
+
+    def clear_execution_form(self) -> None:
+        self.execution_selected_id = None
+        self.exec_date_var.set(today_yyyymmdd())
+        self.exec_code_var.set("")
+        self.exec_name_var.set("")
+        self.exec_plan_action_var.set("")
+        self.exec_plan_shares_var.set("")
+        self.exec_plan_value_var.set("")
+        self.exec_actual_action_var.set("买入")
+        self.exec_actual_shares_var.set("")
+        self.exec_actual_price_var.set("")
+        self.exec_actual_amount_var.set("")
+        self.exec_reason_var.set("")
+        if self.execution_tree is not None:
+            self.execution_tree.selection_remove(self.execution_tree.selection())
+
+    def calculate_execution_amount(self) -> None:
+        try:
+            shares = float(self.exec_actual_shares_var.get() or 0)
+            price = float(self.exec_actual_price_var.get() or 0)
+        except ValueError:
+            messagebox.showwarning("无法计算", "实际股数和成交均价必须是数字。")
+            return
+        if shares <= 0 or price <= 0:
+            messagebox.showwarning("无法计算", "实际股数和成交均价必须大于 0。")
+            return
+        self.exec_actual_amount_var.set("{:.2f}".format(shares * price))
+
+    def _sync_execution_form_to_selected(self) -> None:
+        if not self.execution_selected_id:
+            return
+        record = self._find_execution_record(self.execution_selected_id)
+        if record is not None:
+            record.update(self._execution_record_from_form(self.execution_selected_id))
+
+    def _candidate_execution_template_lines(self, df: pd.DataFrame, status_text: str) -> list[str]:
+        date = str(df["candidate_date"].iloc[0]) if "candidate_date" in df.columns else today_yyyymmdd()
+        rule = str(df["experiment_name"].iloc[0]) if "experiment_name" in df.columns else DEFAULT_STRATEGY_ID
+        account_assets = self.current_assets_var.get().strip() or "未填写"
+        available_cash = self.available_cash_var.get().strip() or "未填写"
+        holding_count = self.holding_count_var.get().strip() or "未填写"
+
+        lines = [
+            "{} 执行记录（按候选股生成）".format(today_yyyymmdd()),
+            "候选日期：{}；规则：{}；{}".format(date, rule, status_text),
+            "交易前账户：总资产={}；可用资金={}；持仓数量={}".format(account_assets, available_cash, holding_count),
+            "",
+            "填写说明：",
+            "- 买到/卖出后，只填“实际成交股数、成交均价、成交金额、备注”。",
+            "- 没有成交的股票，保留在原分组并在备注写原因，或复制到“未执行/跳过”。",
+            "- 不要在这里改系统建议；这里只记录你实际做了什么。",
+            "",
+        ]
+
+        buy_rows = self._filter_action_rows(df, ("新增买入", "加仓后持有"))
+        sell_rows = self._filter_action_rows(df, ("减仓后持有", "清仓卖出"))
+        hold_rows = self._filter_action_rows(df, ("保留/持有",))
+
+        lines.append("一、实际买入/加仓")
+        if buy_rows.empty:
+            lines.append("- 无")
+        else:
+            for _, row in buy_rows.iterrows():
+                lines.append(self._format_execution_row(row, "买入/加仓"))
+
+        lines.extend(["", "二、实际卖出/减仓"])
+        if sell_rows.empty:
+            lines.append("- 无")
+        else:
+            for _, row in sell_rows.iterrows():
+                lines.append(self._format_execution_row(row, "卖出/减仓"))
+
+        lines.extend(["", "三、仅保留持有，不做交易"])
+        if hold_rows.empty:
+            lines.append("- 无")
+        else:
+            for _, row in hold_rows.iterrows():
+                code = str(row.get("code", "")).strip()
+                name = str(row.get("name", "")).strip()
+                shares = self._format_number(row.get("shares", ""), 0)
+                value = self._format_number(row.get("value", ""), 0)
+                lines.append("- {} {} | 持有股数={} | 目标市值={} | 备注：继续持有".format(code, name, shares, value))
+
+        lines.extend(
+            [
+                "",
+                "四、未执行/跳过",
+                "- 代码 | 名称 | 原系统动作 | 原因（涨停/停牌/价格不合适/资金不足/人工放弃/其他）：",
+                "",
+                "五、交易后复核",
+                "交易后总资产：",
+                "交易后可用资金：",
+                "交易后现金比例：",
+                "交易后持仓数量：",
+                "异常说明：",
+            ]
+        )
+        return lines
+
+    def _filter_action_rows(self, df: pd.DataFrame, actions: tuple[str, ...]) -> pd.DataFrame:
+        if "action_hint" not in df.columns:
+            return pd.DataFrame()
+        mask = df["action_hint"].astype(str).isin(actions)
+        return df[mask].copy()
+
+    def _format_execution_row(self, row: pd.Series, trade_type: str) -> str:
+        code = str(row.get("code", "")).strip()
+        name = str(row.get("name", "")).strip()
+        action = str(row.get("action_hint", "")).strip()
+        shares = self._format_number(row.get("shares", ""), 0)
+        value = self._format_number(row.get("value", ""), 0)
+        old_value = self._format_number(row.get("old_value", ""), 0)
+        trade_value = self._format_number(row.get("trade_value", ""), 0)
+        pred = self._format_percent(row.get("pred_return_5d", ""))
+        risk = self._format_number(row.get("risk_score", ""), 1)
+        return (
+            "- [ ] {} {} | 系统动作={} | 类型={} | 建议股数={} | 目标市值={} | 原市值={} | 计划交易金额={} | "
+            "预测5日收益={} | 风险分={} | 实际成交股数：____ | 成交均价：____ | 成交金额：____ | 备注：____"
+        ).format(code, name, action, trade_type, shares, value, old_value, trade_value, pred, risk)
+
+    def clear_action_note(self) -> None:
+        if self.action_note_text is None:
+            return
+        if not self.action_note_text.get("1.0", tk.END).strip():
+            return
+        if messagebox.askyesno("清空确认", "确定清空当前执行记录页面内容吗？"):
+            self.action_note_text.delete("1.0", tk.END)
 
     def insert_action_template(self) -> None:
         if self.action_note_text is None:
@@ -1284,6 +2143,7 @@ class LiveExecutionChecklistGui:
     def save_state(self, show_message: bool = True) -> None:
         data = self._collect_state()
         STATE_JSON.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        self._write_execution_records_csv()
         self._append_weekly_log(data)
         self.last_save_var.set(data["last_saved_at"])
         account = data["account"]
@@ -1321,6 +2181,7 @@ class LiveExecutionChecklistGui:
         return "break"
 
     def _collect_state(self) -> dict:
+        self._sync_execution_form_to_selected()
         auto = {
             key: {
                 "status": self.auto_status_vars[key].get(),
@@ -1355,6 +2216,7 @@ class LiveExecutionChecklistGui:
                 "review": self.run_note_text.get("1.0", tk.END).strip() if self.run_note_text is not None else "",
                 "action": self.action_note_text.get("1.0", tk.END).strip() if self.action_note_text is not None else "",
             },
+            "execution_records": self.execution_records,
         }
 
     def _collect_comparable_state(self) -> dict:
@@ -1403,6 +2265,26 @@ class LiveExecutionChecklistGui:
                     "manual_pass_count": sum(1 for value in manual.values() if value),
                 }
             )
+
+    def _write_execution_records_csv(self) -> None:
+        fieldnames = [
+            "date",
+            "code",
+            "name",
+            "plan_action",
+            "plan_shares",
+            "plan_value",
+            "actual_action",
+            "actual_shares",
+            "actual_price",
+            "actual_amount",
+            "reason",
+        ]
+        with EXECUTION_RECORDS_CSV.open("w", encoding="utf-8-sig", newline="") as file_obj:
+            writer = csv.DictWriter(file_obj, fieldnames=fieldnames)
+            writer.writeheader()
+            for record in self.execution_records:
+                writer.writerow({key: record.get(key, "") for key in fieldnames})
 
     def _load_state(self) -> dict:
         if not STATE_JSON.exists():
