@@ -21,10 +21,10 @@ from xtquant import xtdata
 # 可复用参数区
 # =========================
 
-STOCK_CODE = "002422.SZ"
+STOCK_CODE = "510300.SH"
 PERIOD = "1d"
 START_TIME = "20260511"
-END_TIME = "20260511"
+END_TIME = "20260531"
 DIVIDEND_TYPE = "none"
 FILL_DATA = False
 
