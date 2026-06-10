@@ -24,7 +24,7 @@ from xtquant import xtdata
 STOCK_CODE = "510300.SH"
 PERIOD = "1d"
 START_TIME = "20260511"
-END_TIME = "20260531"
+END_TIME = "20260607"
 DIVIDEND_TYPE = "none"
 FILL_DATA = False
 
