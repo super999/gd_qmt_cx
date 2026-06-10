@@ -10,6 +10,10 @@
 
 ## 当前脚本
 
+- `check_xttrader_trade_access.py`
+  - 外部 Python 交易接口自检脚本，用于验证当前 MiniQMT 是否能通过 `xtquant.xttrader` 连接交易服务、识别账号、订阅账号、查询资产、委托、成交和持仓。
+  - 默认是只查询模式，不会调用 `order_stock`，不会自动下单。
+  - 如果要测试真实委托链路，必须同时传入 `--place-test-order` 和 `--i-understand-this-may-send-a-real-order`；脚本会按参数提交一笔限价测试委托，并默认尝试撤单。
 - `find_stocks_by_price_range.py`
   - 按指定日期、代码前缀、市场后缀和价格区间筛选股票。
   - 默认会先对目标股票池补下载目标日期历史行情，再读取和筛选。
@@ -45,6 +49,7 @@
 ## 推荐运行环境
 
 ```powershell
+d:\python_envs\gd_qmt_env\python.exe code/miniqmt_tools/check_xttrader_trade_access.py --account-id 你的资金账号
 d:\python_envs\gd_qmt_env\python.exe code/miniqmt_tools/find_stocks_by_price_range.py
 d:\python_envs\gd_qmt_env\python.exe code/miniqmt_tools/check_missing_market_data.py
 d:\python_envs\gd_qmt_env\python.exe code/miniqmt_tools/verify_suspend_flag_field.py
@@ -54,3 +59,39 @@ d:\python_envs\gd_qmt_env\python.exe code/miniqmt_tools/财务接口/verify_fina
 ```
 
 运行前请确认 MiniQMT 已启动，且行情连接正常。
+
+## 交易接口自检示例
+
+只做连接和账号查询，不下单：
+
+```powershell
+$env:PYTHONIOENCODING='utf-8'
+& 'd:\python_envs\gd_qmt_env\python.exe' 'code\miniqmt_tools\check_xttrader_trade_access.py' --account-id '你的资金账号'
+```
+
+如果不确定资金账号，可以先不传 `--account-id`，脚本会尝试调用 `query_account_infos` 自动发现账号；若发现多个账号，会提示你重新指定：
+
+```powershell
+$env:PYTHONIOENCODING='utf-8'
+& 'd:\python_envs\gd_qmt_env\python.exe' 'code\miniqmt_tools\check_xttrader_trade_access.py'
+```
+
+保存 JSON 结果：
+
+```powershell
+$env:PYTHONIOENCODING='utf-8'
+& 'd:\python_envs\gd_qmt_env\python.exe' 'code\miniqmt_tools\check_xttrader_trade_access.py' --account-id '你的资金账号' --json-output 'code\miniqmt_tools\outputs\trade_access_check.json'
+```
+
+真实委托链路测试，默认会尝试撤单。只有确认 MiniQMT 当前账户、交易权限、测试标的、数量、价格都符合你的预期后再运行：
+
+```powershell
+$env:PYTHONIOENCODING='utf-8'
+& 'd:\python_envs\gd_qmt_env\python.exe' 'code\miniqmt_tools\check_xttrader_trade_access.py' --account-id '你的资金账号' --place-test-order --i-understand-this-may-send-a-real-order --test-stock 510300.SH --test-side buy --test-volume 100 --test-price 0.01
+```
+
+判断口径：
+
+- `connect` 返回 `0`：外部 Python 到 MiniQMT 交易服务连接成功。
+- `subscribe_account`、`query_stock_asset`、`query_stock_orders`、`query_stock_trades`、`query_stock_positions` 都成功：说明账号查询链路基本可用。
+- 只有启用真实委托测试且 `order_stock` 返回有效委托编号，才能说明自动报单链路已实际触达交易系统。

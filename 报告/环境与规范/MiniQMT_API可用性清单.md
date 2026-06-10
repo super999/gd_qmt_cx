@@ -193,6 +193,9 @@
 | --- | --- | --- | --- | --- | --- |
 | `XtQuantTrader` | `可用` | `code/run_xtquant/test_xtquant_api_matrix.py` 实测 | `code/run_xtquant/test_xtquant_api_matrix.py` | 2026-04-22 实测可成功导入 `XtQuantTrader` 类。 | 当前只证明类可导入，不证明交易连接、下单和回调链路可用。 |
 | `XtQuantTraderCallback` | `可用` | `code/run_xtquant/test_xtquant_api_matrix.py` 实测 | `code/run_xtquant/test_xtquant_api_matrix.py` | 2026-04-22 实测可成功导入 `XtQuantTraderCallback` 类。 | 当前只证明类可导入，不证明回调链路已被触发验证。 |
+| `XtQuantTrader.connect` | `未通过` | `code/miniqmt_tools/check_xttrader_trade_access.py` 实测 | `code/miniqmt_tools/check_xttrader_trade_access.py` | 2026-06-03 使用 `d:\python_envs\gd_qmt_env` 运行只查询模式；`userdata_mini` 与 `userdata` 路径均存在，但 `connect()` 返回 `-1`。本机可见 `XtMiniQmt.exe` 与 `miniquote.exe` 进程。 | 当前结论是交易连接未打通；优先检查 MiniQMT 是否已登录交易账号、是否开启/授权外部 API 交易服务、券商侧是否允许 xttrader 交易调用。 |
+| `query_account_infos/query_account_status/query_stock_asset/query_stock_orders/query_stock_trades/query_stock_positions` | `未执行` | 交易连接失败后未进入账号查询 | `code/miniqmt_tools/check_xttrader_trade_access.py` | 2026-06-03 因 `connect()` 返回 `-1`，脚本没有继续执行账号订阅和资金/持仓/委托查询。 | 等 `connect()` 返回 `0` 后重新运行同一脚本补测。 |
+| `order_stock/cancel_order_stock` | `未测试` | 脚本默认禁用真实委托 | `code/miniqmt_tools/check_xttrader_trade_access.py` | 新脚本已提供双重确认开关：同时传入 `--place-test-order` 与 `--i-understand-this-may-send-a-real-order` 才会调用 `order_stock`，并默认尝试撤单。 | 只有真实委托测试返回有效委托编号，才能确认自动报单链路实际可用。 |
 
 ## 暂不急测但已纳入观察
 
